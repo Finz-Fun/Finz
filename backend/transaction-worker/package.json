@@ -1,0 +1,26 @@
+{
+  "name": "transaction_tracker",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts",
+    "starttransactionworker": "node dist/workers/transactionUpdateWorker.js",
+    "startcandleworker": "node dist/workers/priceUpdateWorker.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bullmq": "^5.41.7",
+    "dotenv": "^16.4.7",
+    "mongodb": "^6.15.0",
+    "mongoose": "^8.11.0",
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
