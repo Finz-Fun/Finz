@@ -8,7 +8,7 @@ dotenv.config();
 export const owner: Keypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(process.env.WALLET_PRIVATE_KEY as any)))
 // export const connection = new Connection('<YOUR_RPC_URL>') //<YOUR_RPC_URL>
 export const connection = new Connection(clusterApiUrl('devnet')) //<YOUR_RPC_URL>
-export const txVersion = TxVersion.V0 // or TxVersion.LEGACY
+export const txVersion = TxVersion.LEGACY // or TxVersion.LEGACY
 const cluster = 'devnet' // 'mainnet' | 'devnet'
 
 let raydium: Raydium | undefined

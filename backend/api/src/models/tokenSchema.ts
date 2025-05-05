@@ -46,7 +46,7 @@ const tokenSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  migratedToMeteora: {
+  migratedToRaydium: {
     type: Boolean,
     default: false
   }

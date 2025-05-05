@@ -49,6 +49,10 @@ import {
   PlatformConfig,
   LAUNCHPAD_PROGRAM,
   ApiV3Token,
+  getCpmmPdaAmmConfigId,
+  DEVNET_PROGRAM_ID,
+  getPdaLaunchpadConfigId,
+  LaunchpadConfig,
 } from '@raydium-io/raydium-sdk-v2'
 import { initSdk } from './config'
 import axios from 'axios';
@@ -86,6 +90,7 @@ const platformWallet1 = new PublicKey("7tMpmwww2ZXu8kwNXh88tQS72h2eS86LGm5A3cPJb
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 const readOnlyProvider = new AnchorProvider(connection, new Wallet(platformWallet), {});
 const programId = new PublicKey(process.env.PROGRAM_ID as any);
+const platformId = new PublicKey(process.env.PLATFORM_ID as any);
 const program = new Program<AiAgent>(IDL, readOnlyProvider);
 const POOL_SEED_PREFIX = "liquidity_pool"
 const SOL_VAULT_PREFIX = "liquidity_sol_vault"
@@ -127,8 +132,7 @@ async function uploadToS3(
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: imageKey,
       Body: imageBuffer,
-      ContentType: contentType,
-      ACL: 'public-read' 
+      ContentType: contentType
     }));
 
     const imageUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${imageKey}`;
@@ -145,8 +149,7 @@ async function uploadToS3(
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: metadataKey,
       Body: JSON.stringify(metadata),
-      ContentType: 'application/json',
-      ACL: 'public-read'
+      ContentType: 'application/json'
     }));
 
     return {metadataUri: `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${metadataKey}`, imageUrl: imageUrl}
@@ -426,6 +429,7 @@ async function generateTweetImage(tweetData: TweetData): Promise<Buffer> {
     quality: 100,
     type: 'png',
     puppeteerArgs: {
+      args: ['--no-sandbox'],
       defaultViewport: {
         width: 598,
         height: estimatedHeight,
@@ -565,33 +569,33 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     if(!creator){
       throw new Error("Creator not found")
     }
-    const umi = createUmi(SOLANA_RPC_URL)
-	  .use(mplTokenMetadata())
-	  .use(mplToolbox());
+    // const umi = createUmi(SOLANA_RPC_URL)
+	  // .use(mplTokenMetadata())
+	  // .use(mplToolbox());
     
     const mintKeypair = Keypair.fromSecretKey(new Uint8Array(mintSecretKey));
-    const keypair = umi.eddsa.createKeypairFromSecretKey(Uint8Array.from(JSON.parse(WALLET_PRIVATE_KEY)))
-    const mintpair = umi.eddsa.createKeypairFromSecretKey(mintSecretKey)
+    // const keypair = umi.eddsa.createKeypairFromSecretKey(Uint8Array.from(JSON.parse(WALLET_PRIVATE_KEY)))
+    // const mintpair = umi.eddsa.createKeypairFromSecretKey(mintSecretKey)
     
 
-    const mintSigner = createSignerFromKeypair(umi, mintpair);
+    // const mintSigner = createSignerFromKeypair(umi, mintpair);
 
-    umi.use(keypairIdentity(keypair,true))
+    // umi.use(keypairIdentity(keypair,true))
 
 
 
-    const platformTokenAccount = await getAssociatedTokenAddress(
-      mintKeypair.publicKey,
-      platformWallet.publicKey
-    );
+    // const platformTokenAccount = await getAssociatedTokenAddress(
+    //   mintKeypair.publicKey,
+    //   platformWallet.publicKey
+    // );
 
-    const TOTAL_SUPPLY = new BN(1000000000).mul(new BN(10 ** 9))
+    // const TOTAL_SUPPLY = new BN(1000000000).mul(new BN(10 ** 9))
 
-    const tokenMetadata = {
-      name: token?.name as string,
-      symbol: token?.symbol as string,
-      uri: token?.metadataUri as string
-    };
+    // const tokenMetadata = {
+    //   name: token?.name as string,
+    //   symbol: token?.symbol as string,
+    //   uri: token?.metadataUri as string
+    // };
 
     // const metadataAccountAddress = findMetadataPda(umi, {
     //   mint: publicKey(mintKeypair.publicKey.toBase58()),
@@ -600,50 +604,50 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     // const INITIAL_LIQUIDITY_SOL =Math.floor(parseFloat("0.02") * 1e9); 
     const buyAmount = Math.floor(parseFloat(solAmount as string) * 1e9); 
 
-    const userTokenAccount = await getAssociatedTokenAddress(
-      mintKeypair.publicKey,
-      user
-    );
+    // const userTokenAccount = await getAssociatedTokenAddress(
+    //   mintKeypair.publicKey,
+    //   user
+    // );
 
-    const [poolPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(POOL_SEED_PREFIX), mintKeypair.publicKey.toBuffer()],
-      program.programId
-    );
+    // const [poolPda] = PublicKey.findProgramAddressSync(
+    //   [Buffer.from(POOL_SEED_PREFIX), mintKeypair.publicKey.toBuffer()],
+    //   program.programId
+    // );
 
-    const [poolSolVault] = PublicKey.findProgramAddressSync(
-      [Buffer.from(SOL_VAULT_PREFIX), mintKeypair.publicKey.toBuffer()],
-      program.programId
-    );
+    // const [poolSolVault] = PublicKey.findProgramAddressSync(
+    //   [Buffer.from(SOL_VAULT_PREFIX), mintKeypair.publicKey.toBuffer()],
+    //   program.programId
+    // );
 
-    const poolTokenAccount = await getAssociatedTokenAddress(
-      mintKeypair.publicKey, 
-      poolPda, 
-      true
-    );
+    // const poolTokenAccount = await getAssociatedTokenAddress(
+    //   mintKeypair.publicKey, 
+    //   poolPda, 
+    //   true
+    // );
 
 
-    const metadataTx = createV1(umi, {
-      mint: mintSigner,
-      authority: umi.identity,
-      updateAuthority: umi.identity,
-      name: tokenMetadata.name,
-      symbol: tokenMetadata.symbol,
-      uri: tokenMetadata.uri,
-      sellerFeeBasisPoints: percentAmount(0),
-      tokenStandard: TokenStandard.Fungible,
-    })
+    // const metadataTx = createV1(umi, {
+    //   mint: mintSigner,
+    //   authority: umi.identity,
+    //   updateAuthority: umi.identity,
+    //   name: tokenMetadata.name,
+    //   symbol: tokenMetadata.symbol,
+    //   uri: tokenMetadata.uri,
+    //   sellerFeeBasisPoints: percentAmount(0),
+    //   tokenStandard: TokenStandard.Fungible,
+    // })
     
-    const metadataInstructions = metadataTx.getInstructions().map(umiIx => {
-      return new TransactionInstruction({
-        keys: umiIx.keys.map(key => ({
-          pubkey: new PublicKey(key.pubkey.toString()),
-          isSigner: key.isSigner,
-          isWritable: key.isWritable
-        })),
-        programId: new PublicKey(umiIx.programId.toString()),
-        data: Buffer.from(umiIx.data)
-      });
-    });
+    // const metadataInstructions = metadataTx.getInstructions().map(umiIx => {
+    //   return new TransactionInstruction({
+    //     keys: umiIx.keys.map(key => ({
+    //       pubkey: new PublicKey(key.pubkey.toString()),
+    //       isSigner: key.isSigner,
+    //       isWritable: key.isWritable
+    //     })),
+    //     programId: new PublicKey(umiIx.programId.toString()),
+    //     data: Buffer.from(umiIx.data)
+    //   });
+    // });
 
   //   const mintAuthorityInstruction = createSetAuthorityInstruction(
   //     mintKeypair.publicKey,
@@ -654,49 +658,72 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
    
   // createMint(connection, platformWallet, platformWallet.publicKey, null, 9, mintKeypair)
 
-   const lamports = await getMinimumBalanceForRentExemptMint(connection);
+  //  const lamports = await getMinimumBalanceForRentExemptMint(connection);
 
     const tx = new Transaction()
-    .add(
-      SystemProgram.createAccount({
-        fromPubkey: user,
-        newAccountPubkey: mintKeypair.publicKey,
-        space: MINT_SIZE,
-        lamports,
-        programId: TOKEN_PROGRAM_ID
-    }),
-    createInitializeMint2Instruction(mintKeypair.publicKey, 9, platformWallet.publicKey, null, TOKEN_PROGRAM_ID),
-    createAssociatedTokenAccountInstruction(platformWallet.publicKey, platformTokenAccount, platformWallet.publicKey, mintKeypair.publicKey),
-    createMintToInstruction(mintKeypair.publicKey, platformTokenAccount, platformWallet.publicKey, BigInt(TOTAL_SUPPLY.toString()))
-    )
+    // .add(
+    //   SystemProgram.createAccount({
+    //     fromPubkey: user,
+    //     newAccountPubkey: mintKeypair.publicKey,
+    //     space: MINT_SIZE,
+    //     lamports,
+    //     programId: TOKEN_PROGRAM_ID
+    // }),
+    // createInitializeMint2Instruction(mintKeypair.publicKey, 9, platformWallet.publicKey, null, TOKEN_PROGRAM_ID),
+    // createAssociatedTokenAccountInstruction(platformWallet.publicKey, platformTokenAccount, platformWallet.publicKey, mintKeypair.publicKey),
+    // createMintToInstruction(mintKeypair.publicKey, platformTokenAccount, platformWallet.publicKey, BigInt(TOTAL_SUPPLY.toString()))
+    // )
 
 
-    tx.add(...metadataInstructions)    
-      tx.add(
-        await program.methods
-          .createPoolWithLiquidity(new PublicKey(creator.walletAddress as string))
-          .accounts({
-            tokenMint: mintKeypair.publicKey,
-            payer: user,
-            admin: platformWallet.publicKey
-          })
-          .instruction(),
-          // mintAuthorityInstruction,
-        await program.methods
-          .buy(new BN(buyAmount.toString()), new BN(0))
-          .accounts({ 
-            tokenMint: mintKeypair.publicKey,
-            user: user,
-            platformFeeWallet1: platformWallet1,
-            creatorFeeWallet: new PublicKey(creator.walletAddress as string)
-          })
-          .instruction()
-      );
+    // tx.add(...metadataInstructions)    
+    const raydium = await initSdk()
+    const  mintA = mintKeypair.publicKey
+    const configId = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey
 
+    const configData = await raydium.connection.getAccountInfo(configId)
+    if (!configData) throw new Error('config not found')
+    const configInfo = LaunchpadConfig.decode(configData.data)
+    const mintBInfo = await raydium.token.getTokenInfo(configInfo.mintB)
+
+    const { execute, transactions, extInfo } = await raydium.launchpad.createLaunchpad({
+      programId,
+      mintA,
+      decimals: 6,
+      name: token?.name as string,
+      symbol: token?.symbol as string,
+      migrateType: 'cpmm',
+      uri: token?.metadataUri as string,
+  
+      configId,
+      // configInfo, // optional, sdk will get data by configId if not provided
+      mintBDecimals: mintBInfo.decimals, // default 9
+      platformId: new PublicKey(platformId),
+      txVersion: TxVersion.LEGACY,
+      slippage: new BN(100), // means 1%
+      buyAmount: new BN(buyAmount),
+      createOnly: false, // true means create mint only, false will "create and buy together"
+      extraSigners: [mintKeypair],
+  
+      supply: new BN(1_000_000_000_000_000), // lauchpad mint supply amount, default: LaunchpadPoolInitParam.supply
+      totalSellA: new BN(793_100_000_000_000),  // lauchpad mint sell amount, default: LaunchpadPoolInitParam.totalSellA
+      totalFundRaisingB: new BN(85_000_000_000),  // if mintB = SOL, means 85 SOL, default: LaunchpadPoolInitParam.totalFundRaisingB
+      // totalLockedAmount: new BN(0),  // total locked amount, default 0
+      // cliffPeriod: new BN(0),  // unit: seconds, default 0
+      // unlockPeriod: new BN(0),  // unit: seconds, default 0
+  
+      // shareFeeReceiver: new PublicKey(platformWallet.publicKey.toString()), // only works when createOnly=false
+      // shareFeeRate: new BN(1000), // only works when createOnly=false
+  
+      // computeBudgetConfig: {
+      //   units: 600000,
+      //   microLamports: 46591500,
+      // },
+    })
+
+    tx.add(...transactions)
     tx.feePayer = user;
     tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
-    tx.partialSign(platformWallet, mintKeypair);
+    tx.partialSign(mintKeypair)
 
     const serializedTransaction = tx.serialize({
       requireAllSignatures: false,
@@ -709,10 +736,7 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
       message: "Transaction created successfully. Sign and submit to add liquidity and buy tokens.",
       // initialLiquiditySol: INITIAL_LIQUIDITY_SOL/1e9,
       buyAmountSol: buyAmount / 1e9,
-      poolPda: poolPda.toBase58(),
-      poolSolVault: poolSolVault.toBase58(),
-      poolTokenAccount: poolTokenAccount.toBase58(),
-      userTokenAccount: userTokenAccount.toBase58()
+      tx: tx
     });
 
   } catch (error: any) {
@@ -1695,55 +1719,7 @@ app.get(`/health`, (req: Request, res: Response) => {
 });
 
 
-const createPlatform = async () => {
-  const raydium = await initSdk()
-  const owner = raydium.ownerPubKey
 
-  console.log(DEV_LAUNCHPAD_PROGRAM)
-
-  /** notice: every wallet only enable to create "1" platform config */
-  const { transaction, extInfo, execute } = await raydium.launchpad.createPlatformConfig({
-    programId: DEV_LAUNCHPAD_PROGRAM, // devnet: DEV_LAUNCHPAD_PROGRAM,
-    platformAdmin: owner,
-    platformClaimFeeWallet: owner,
-    platformLockNftWallet: owner,
-    cpConfigId: new PublicKey('Fv9xzxiVRhEdEED14WuFHhTJASkL1APmyjwiqYaCX6kc'),
-    /**
-     * when migration, launchpad pool will deposit mints in vaultA/vaultB to new cpmm pool
-     * and return lp to migration wallet
-     * migrateCpLockNftScale config is to set up usage of these lp
-     * note: sum of these 3 should be 10**6, means percent (0%~100%)
-     */
-    migrateCpLockNftScale: {
-      platformScale: new BN(500000), // means 40%, locked 40% of return lp and return to platform nft wallet
-      creatorScale: new BN(400000), // means 50%, locked 50% of return lp and return to creator nft wallet
-      burnScale: new BN(100000), // means 10%, burned return lp percent after migration
-    },
-    feeRate: new BN(1000), // launch lab buy and sell platform feeRate, from 0~100000, means 0% ~ 100%
-    name: 'Finz',
-    web: 'https://finz.fun',
-    img: 'https://finz.fun/logo.png',
-    txVersion: TxVersion.V0,
-    // computeBudgetConfig: {
-    //   units: 600000,
-    //   microLamports: 600000,
-    // },
-  })
-
-  //   printSimulate([transaction])
-
-  try {
-    const sentInfo = await execute({ sendAndConfirm: true })
-    console.log(sentInfo, `platformId devnet: ${extInfo.platformId.toBase58()}`)
-  } catch (e: any) {
-    console.log(e)
-  }
-
-  process.exit() // if you don't want to end up node execution, comment this line
-}
-
-
-createPlatform()
 
 
 
