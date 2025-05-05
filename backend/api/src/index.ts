@@ -36,10 +36,23 @@ import { createTransferInstruction } from '@solana/spl-token';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 // @ts-ignore
 import AmmImpl, { PROGRAM_ID, } from '@mercurial-finance/dynamic-amm-sdk';
-import { derivePoolAddressWithConfig } from '@mercurial-finance/dynamic-amm-sdk/dist/cjs/src/amm/utils';
 // import { derivePoolAddressWithConfig } from '@meteora-ag/dynamic-amm-sdk/dist/cjs/src/amm/utils';
 import * as dotenv from 'dotenv';
 import mongoose from 'mongoose';
+
+import {
+  TxVersion,
+  DEV_LAUNCHPAD_PROGRAM,
+  printSimulate,
+  getPdaLaunchpadPoolId,
+  Curve,
+  PlatformConfig,
+  LAUNCHPAD_PROGRAM,
+  ApiV3Token,
+} from '@raydium-io/raydium-sdk-v2'
+import { initSdk } from './config'
+import axios from 'axios';
+// import Decimal from 'decimal.js'
 
 
 dotenv.config();
@@ -81,123 +94,9 @@ function sleep(ms: number) {
 }
 
 
-type AllocationByPercentage = {
-  address: PublicKey;
-  percentage: number;
-};
-
-type AllocationByAmount = {
-  address: PublicKey;
-  amount: BN;
-};
 
 
-function fromAllocationsToAmount(lpAmount: BN, allocations: AllocationByPercentage[]): AllocationByAmount[] {
-  const sumPercentage = allocations.reduce((partialSum, a) => partialSum + a.percentage, 0);
-  if (sumPercentage === 0) {
-    throw Error('sumPercentage is zero');
-  }
 
-  let amounts: AllocationByAmount[] = [];
-  let sum = new BN(0);
-  for (let i = 0; i < allocations.length - 1; i++) {
-    const amount = lpAmount.mul(new BN(allocations[i].percentage)).div(new BN(sumPercentage));
-    sum = sum.add(amount);
-    amounts.push({
-      address: allocations[i].address,
-      amount,
-    });
-  }
-  // the last wallet get remaining amount
-  amounts.push({
-    address: allocations[allocations.length - 1].address,
-    amount: lpAmount.sub(sum),
-  });
-  return amounts;
-}
-
-async function getClaimableFee(poolAddress: PublicKey, owner: PublicKey) {
-  const pool = await AmmImpl.create(readOnlyProvider.connection, poolAddress);
-  let result = await pool.getUserLockEscrow(owner);
-  console.log('unClaimed: %s', result?.fee.unClaimed.lp?.toString());
-  console.log(result)
-}
-
-async function getMeteoraPoolInfo(poolAddress: PublicKey) {
-  const pool = await AmmImpl.create(readOnlyProvider.connection, poolAddress);
-  const poolInfo = pool.poolInfo;
-
-  console.log('Pool Address: %s', poolAddress.toString());
-  const poolTokenAddress = await pool.getPoolTokenMint();
-  console.log('Pool LP Token Mint Address: %s', poolTokenAddress.toString());
-  const LockedLpAmount = await pool.getLockedLpAmount();
-  console.log('Locked Lp Amount: %s', LockedLpAmount.toNumber());
-  const lpSupply = await pool.getLpSupply();
-  console.log('Pool LP Supply: %s \n', lpSupply.toNumber() / Math.pow(10, pool.decimals));
-
-  console.log(
-    'tokenA %s Amount: %s ',
-    pool.tokenAMint.address,
-    poolInfo.tokenAAmount.toNumber() / Math.pow(10, pool.tokenAMint.decimals),
-  );
-  console.log(
-    'tokenB %s Amount: %s',
-    pool.tokenBMint.address,
-    poolInfo.tokenBAmount.toNumber() / Math.pow(10, pool.tokenBMint.decimals),
-  );
-  console.log('virtualPrice: %s', poolInfo.virtualPrice);
-  console.log('virtualPriceRaw to String: %s \n', poolInfo.virtualPriceRaw.toString());
-}
-
-
-async function createPoolAndLockLiquidity(
-  tokenAMint: PublicKey,
-  tokenBMint: PublicKey,
-  tokenAAmount: BN,
-  tokenBAmount: BN,
-  config: PublicKey,
-  allocations: AllocationByPercentage[],
-) {
-  let txHashArray = [];
-  const programID = new PublicKey(PROGRAM_ID);
-  const poolPubkey = derivePoolAddressWithConfig(tokenAMint, tokenBMint, config, programID);
-  // Create the pool
-  console.log('create pool %s', poolPubkey);
-  let transactions = await AmmImpl.createPermissionlessConstantProductPoolWithConfig(
-    readOnlyProvider.connection,
-    platformWallet.publicKey,
-    tokenAMint,
-    tokenBMint,
-    tokenAAmount,
-    tokenBAmount,
-    config,
-  );
-  for (const transaction of transactions) {
-    transaction.sign(platformWallet);
-    const txHash = await readOnlyProvider.connection.sendRawTransaction(transaction.serialize());
-    await readOnlyProvider.connection.confirmTransaction(txHash, 'finalized');
-    console.log('transaction %s', txHash);
-  }
-
-  // Create escrow and lock liquidity
-  const [lpMint] = PublicKey.findProgramAddressSync([Buffer.from("lp_mint"), poolPubkey.toBuffer()], programID);
-  const payerPoolLp = await getAssociatedTokenAddress(lpMint, platformWallet.publicKey);
-  const payerPoolLpBalance = (await readOnlyProvider.connection.getTokenAccountBalance(payerPoolLp)).value.amount;
-  console.log('payerPoolLpBalance %s', payerPoolLpBalance.toString());
-
-  let allocationByAmounts = fromAllocationsToAmount(new BN(payerPoolLpBalance), allocations);
-  const pool = await AmmImpl.create(readOnlyProvider.connection, poolPubkey);
-  for (const allocation of allocationByAmounts) {
-    console.log('Lock liquidity %s', allocation.address.toString());
-    let transaction = await pool.lockLiquidity(allocation.address, allocation.amount, platformWallet.publicKey);
-    transaction.sign(platformWallet);
-    const txHash = await readOnlyProvider.connection.sendRawTransaction(transaction.serialize());
-    await readOnlyProvider.connection.confirmTransaction(txHash, 'finalized');
-    console.log('transaction %s', txHash);
-    txHashArray.push(txHash);
-  }
-  return txHashArray;
-}
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION!,
@@ -269,52 +168,6 @@ interface TweetData {
   avatarUrl?: string;
 }
 
-
-async function checkBalances(tokenMintPubkey: PublicKey) {
-  // Check SOL balance
-  const solBalance = await connection.getBalance(platformWallet.publicKey);
-  console.log(`SOL Balance: ${solBalance / LAMPORTS_PER_SOL}`);
-  
-  // Check WSOL balance
-  const wsolAta = await getOrCreateAssociatedTokenAccount(
-    connection, 
-    platformWallet, 
-    NATIVE_MINT, 
-    platformWallet.publicKey
-  );
-  let wsolBalance = 0;
-  try {
-    const wsolBalanceInfo = await connection.getTokenAccountBalance(wsolAta.address);
-    wsolBalance = Number(wsolBalanceInfo.value.amount) / 10**9;
-    console.log(`WSOL Balance: ${wsolBalance}`);
-  } catch (e) {
-    console.log("WSOL account may not exist yet or has no balance");
-  }
-  
-  // Check token balance
-  const tokenAta = await getOrCreateAssociatedTokenAccount(
-    connection, 
-    platformWallet, 
-    tokenMintPubkey, 
-    platformWallet.publicKey
-  );
-  let tokenBalance = 0;
-  try {
-    const tokenBalanceInfo = await connection.getTokenAccountBalance(tokenAta.address);
-    tokenBalance = Number(tokenBalanceInfo.value.amount) / 10**9;
-    console.log(`Token Balance: ${tokenBalance}`);
-  } catch (e) {
-    console.log("Token account may not exist yet or has no balance");
-  }
-  
-  return { 
-    solBalance: solBalance / LAMPORTS_PER_SOL, 
-    wsolBalance, 
-    tokenBalance, 
-    wsolAta, 
-    tokenAta 
-  };
-}
 
 async function generateTweetImage(tweetData: TweetData): Promise<Buffer> {
 
@@ -1841,210 +1694,57 @@ app.get(`/health`, (req: Request, res: Response) => {
   res.send("ok");
 });
 
-app.post('/api/migrate-to-meteora', async (req: Request, res: Response) => {
+
+const createPlatform = async () => {
+  const raydium = await initSdk()
+  const owner = raydium.ownerPubKey
+
+  console.log(DEV_LAUNCHPAD_PROGRAM)
+
+  /** notice: every wallet only enable to create "1" platform config */
+  const { transaction, extInfo, execute } = await raydium.launchpad.createPlatformConfig({
+    programId: DEV_LAUNCHPAD_PROGRAM, // devnet: DEV_LAUNCHPAD_PROGRAM,
+    platformAdmin: owner,
+    platformClaimFeeWallet: owner,
+    platformLockNftWallet: owner,
+    cpConfigId: new PublicKey('Fv9xzxiVRhEdEED14WuFHhTJASkL1APmyjwiqYaCX6kc'),
+    /**
+     * when migration, launchpad pool will deposit mints in vaultA/vaultB to new cpmm pool
+     * and return lp to migration wallet
+     * migrateCpLockNftScale config is to set up usage of these lp
+     * note: sum of these 3 should be 10**6, means percent (0%~100%)
+     */
+    migrateCpLockNftScale: {
+      platformScale: new BN(500000), // means 40%, locked 40% of return lp and return to platform nft wallet
+      creatorScale: new BN(400000), // means 50%, locked 50% of return lp and return to creator nft wallet
+      burnScale: new BN(100000), // means 10%, burned return lp percent after migration
+    },
+    feeRate: new BN(1000), // launch lab buy and sell platform feeRate, from 0~100000, means 0% ~ 100%
+    name: 'Finz',
+    web: 'https://finz.fun',
+    img: 'https://finz.fun/logo.png',
+    txVersion: TxVersion.V0,
+    // computeBudgetConfig: {
+    //   units: 600000,
+    //   microLamports: 600000,
+    // },
+  })
+
+  //   printSimulate([transaction])
+
   try {
-    const { tokenMint } = req.body;
-
-    if (!tokenMint) {
-       res.status(400).json({ error: 'Token mint address is required' });
-       return
-    }
-
-
-
-    console.log(`Starting Meteora migration for token: ${tokenMint}`);
-
-    const tokenMintPubkey = new PublicKey(tokenMint);
-    const wsolMintPubkey = NATIVE_MINT;
-    const walletPubkey = platformWallet.publicKey;
-
-    const token = await Token.findOne({mintAddress: tokenMint});
-
-    if (!token) {
-      res.status(404).json({ error: 'Token not found' });
-      return
-    }
-
-    if(token.migratedToMeteora){
-      res.status(400).json({ error: 'Token already migrated to Meteora' });
-      return
-    }
-
-    const creator = await Creator.findOne({twitterId: token.creator});
-    if(!creator){
-      res.status(404).json({ error: 'Creator not found' });
-      return
-    }
-    const secretKey = Uint8Array.from(
-      Buffer.from(token.secretKey as string, 'base64')
-    );
-    const mintKeypair = Keypair.fromSecretKey(secretKey);
-
-    console.log(mintKeypair.publicKey.toBase58())
-
-
-    const [poolPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(POOL_SEED_PREFIX), tokenMintPubkey.toBuffer()],
-      programId
-    );
-
-    const pool = await program.account.liquidityPool.fetch(poolPda);
-    console.log(pool)
-    if (pool.migratedToMeteora) {
-      res.status(400).json({ error: 'Pool already migrated to Meteora' });
-      return
-    }
-
-    if (pool.creator.toBase58() !== walletPubkey.toBase58()) {
-      res.status(403).json({ error: 'Only pool creator can migrate' });
-      return
-    }
-    // Step 1: Migrate to Raydium (transfer SOL and burn tokens)
-    const migrateIx = await program.methods
-      .migrateToMeteora()
-      .accounts({
-        tokenMint: tokenMintPubkey,
-        authority: walletPubkey,
-      })
-      .instruction();
-
-    // Calculate initial amounts based on SOL in the pool
-    const solAmount = new BN(pool.reserveSol.toString());
-    // The amount of tokens to use is calculated in the program
-    const tokenBase = new BN(200_000_000);
-    const decimalMultiplier = new BN(10).pow(new BN(9));
-    const tokenAmount = tokenBase.mul(decimalMultiplier);
-
-    const config =  SOLANA_ENVIRONMENT === 'mainnet' ? new PublicKey("5hB9XMUWdMwA3sDhW7msjPiu3UeFbHyEAurmJC2XrQ93") : new PublicKey("BdfD7rrTZEWmf8UbEBPVpvM3wUqyrR8swjAy5SNT8gJ2");
-
-    const tx = new Transaction()
-    .add(migrateIx);
-
-    const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-    tx.recentBlockhash = latestBlockhash.blockhash;
-    tx.feePayer = walletPubkey;
-
-    
-
-    // Then use it before pool creation
-    
-
-    try {
-      console.log("Sending migration transaction...");
-      const txid = await sendAndConfirmTransaction(
-        connection,
-        tx,
-        [platformWallet],
-        {
-          commitment: 'confirmed',
-          skipPreflight: true,
-        }
-      );
-
-      console.log(`Migration successful! Transaction ID: ${txid}`);
-
-      const allocations = [
-        {
-          address: new PublicKey(creator.walletAddress as string),
-          percentage: 50
-        },
-        {
-          address: platformWallet1,
-          percentage: 50
-        }
-      ]
-      const txHashArray = await createPoolAndLockLiquidity(tokenMintPubkey, wsolMintPubkey, tokenAmount, solAmount, config, allocations);
-
-      console.log(txHashArray)
-
-      
-
-
-      const updatedToken = await Token.findOneAndUpdate(
-        { mintAddress: tokenMint },
-        { 
-          migratedToMeteora: true,
-        },
-        { new: true }
-      );
-      console.log('Updated token record in DB:', updatedToken);
-
-      res.status(200).json({
-        success: true,
-        transactionId: txHashArray[0]
-      });
-
-    } catch (error: any) {
-      console.error("Error sending migration transaction:", error);
-       res.status(500).json({ 
-        error: 'Migration Transaction failed',
-        details: error.message,
-        logs: error.logs 
-      });
-      return
-    }
-
-  } catch (error: any) {
-    console.error('Error in migrate-to-raydium setup:', error);
-       res.status(500).json({
-      error: 'Migration setup failed',
-      details: error.message,
-    });
-    return
+    const sentInfo = await execute({ sendAndConfirm: true })
+    console.log(sentInfo, `platformId devnet: ${extInfo.platformId.toBase58()}`)
+  } catch (e: any) {
+    console.log(e)
   }
-});
+
+  process.exit() // if you don't want to end up node execution, comment this line
+}
 
 
-// async function createLookupTable() {
-//   // Create a new lookup table
-//   const slot = await connection.getSlot();
-//   const [lookupTableInst, lookupTableAddr] = AddressLookupTableProgram.createLookupTable({
-//     authority: platformWallet.publicKey,
-//     payer: platformWallet.publicKey,
-//     recentSlot: slot,
-//   });
-  
-//   // Addresses to add to lookup table - add ALL commonly used addresses
-//   const addressesToAdd = [
-//     platformWallet.publicKey,
-//     platformWallet1,
-//     platformWallet2,
-//     // Add any other frequent addresses
-//   ];
-  
-//   // Create and send transaction to create lookup table
-//   const extendInstruction = AddressLookupTableProgram.extendLookupTable({
-//     payer: platformWallet.publicKey,
-//     authority: platformWallet.publicKey,
-//     lookupTable: lookupTableAddr,
-//     addresses: addressesToAdd,
-//   });
-  
-//   const lookupTableTx = new Transaction()
-//     .add(lookupTableInst)
-//     .add(extendInstruction);
-  
-//   lookupTableTx.feePayer = platformWallet.publicKey;
-//   lookupTableTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-  
-//   const signature = await sendAndConfirmTransaction(
-//     connection, 
-//     lookupTableTx, 
-//     [platformWallet]
-//   );
-  
-//   console.log(`Lookup table created with address: ${lookupTableAddr.toBase58()}`);
-//   console.log(`Transaction signature: ${signature}`);
-  
-//   return lookupTableAddr.toBase58();
-// }
+createPlatform()
 
-// // Run this function once
-// createLookupTable().then(address => {
-//   console.log('SAVE THIS ADDRESS IN YOUR CONFIG:', address);
-// }).catch(error => {
-//   console.error('Error creating lookup table:', error);
-// });
 
 
 app.listen(PORT, () => {
