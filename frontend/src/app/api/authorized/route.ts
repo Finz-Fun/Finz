@@ -1,8 +1,10 @@
 import { NextResponse, NextRequest } from "next/server";
 import Wallet from "@/models/wallet";
+import { connectDB } from "@/lib/mongoose";
 
 export async function GET(req: NextRequest) {
   try {
+    await connectDB();
     const walletAddress = req.nextUrl.searchParams.get("walletAddress");
     
     if (!walletAddress) {

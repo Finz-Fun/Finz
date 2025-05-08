@@ -22,6 +22,7 @@ import { Toaster } from "@/components/ui/toaster"
 import { useToast } from "@/hooks/use-toast";
 // 0. Set up Solana Adapter
 const solanaWeb3JsAdapter = new SolanaAdapter({
+  //@ts-ignore
   wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()]
 })
 

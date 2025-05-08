@@ -3,7 +3,7 @@ import { PublicKey, Connection } from '@solana/web3.js';
 import { Program } from '@coral-xyz/anchor';
 import { AiAgent,IDL } from '../idl/ai_agent';
 import { PoolData } from '../types/trading';
-import { PROGRAM_ID } from '@/config';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
 const VIRTUAL_SOL = new BN(25_000_000_000); // 25 SOL in lamports
 const POOL_SEED_PREFIX = "liquidity_pool";

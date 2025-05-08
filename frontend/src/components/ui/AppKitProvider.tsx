@@ -6,8 +6,11 @@ import { createAppKit } from "@reown/appkit/react";
 import { solana } from "@reown/appkit/networks";
 import { useEffect } from "react";
 
+
 export function AppKitProvider({ children }: { children: React.ReactNode }) {
     const solanaWeb3JsAdapter = new SolanaAdapter({
+
+        //@ts-ignore
         wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()]
     });
 

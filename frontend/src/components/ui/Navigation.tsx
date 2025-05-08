@@ -13,6 +13,7 @@ import { useSession } from "next-auth/react";
 import { useSearch } from "@/context/SearchContext";
 
 const solanaWeb3JsAdapter = new SolanaAdapter({
+  //@ts-ignore
   wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()]
 });
 

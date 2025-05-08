@@ -10,16 +10,15 @@ import {  useSearchParams, useRouter } from "next/navigation";
 import {Transaction, Connection} from "@solana/web3.js";
 import {  useAppKitProvider } from "@reown/appkit/react";
 import { Provider } from "@reown/appkit-adapter-solana/react";
-import { getAssociatedTokenAddress } from "@solana/spl-token";
+import { getAssociatedTokenAddress, NATIVE_MINT } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { Suspense } from 'react';
 import { getPoolSolBalance,  getPoolTokenBalance,  unsubscribeFromPool } from "@/utils/pool";
-import { connection } from "@/config";
+import { connection, initSdk } from "@/config";
 import { Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import { AiAgent, IDL } from "@/idl/ai_agent";
-import { PROGRAM_ID } from "@/config";
 import { subscribeToPoolTransactions, fetchHistoricalTransactions } from "@/utils/pool";
 import {
   Card,
@@ -38,6 +37,8 @@ import Zoom from "react-medium-image-zoom";
 import "react-medium-image-zoom/dist/styles.css";
 import { Cog6ToothIcon } from "@heroicons/react/24/solid";
 import { SettingsModal } from "@/components/ui/SettingsModal";
+import { Curve, PlatformConfig, TxVersion, getPdaLaunchpadPoolId } from "@raydium-io/raydium-sdk-v2";
+import Decimal from 'decimal.js'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
 const DUMMY_PRIVATE_KEY = process.env.NEXT_PUBLIC_DUMMY_PRIVATE_KEY as string
@@ -210,18 +211,18 @@ function CoinContent() {
           subscriptionIdRef.current = null;
         }
 
-        const subscriptionId = await subscribeToPoolTransactions(
-          PROGRAM_ID,
-          connection,
-          tokenMint.toString(),
-          (transaction) => {
-            setTransactions(prev => [transaction, ...prev].slice(0, 50));
-            setReserveToken(transaction.reserveToken);
-            setPoolSolBalance(transaction.reserveSol);
-          }
-        );
+        // const subscriptionId = await subscribeToPoolTransactions(
+        //   PROGRAM_ID,
+        //   connection,
+        //   tokenMint.toString(),
+        //   (transaction) => {
+        //     setTransactions(prev => [transaction, ...prev].slice(0, 50));
+        //     setReserveToken(transaction.reserveToken);
+        //     setPoolSolBalance(transaction.reserveSol);
+        //   }
+        // );
 
-        subscriptionIdRef.current = subscriptionId;
+        // subscriptionIdRef.current = subscriptionId;
       } catch (error) {
         console.log('Error setting up transactions:', error);
       }
@@ -685,12 +686,13 @@ interface TradingPanelProps {
 
 const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, reserveToken, setIsLiquidityActive, action, updateReserveTokenAmount }: TradingPanelProps) => {
   const [activeTab, setActiveTab] = useState(action || "BUY");
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState<BN>(new BN(0));
   const [tokenAmount, setTokenAmount] = useState<string>("0");
+  const [inputValue, setInputValue] = useState<string>("");
   const [activeButton, setActiveButton] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [tokenBalance, setTokenBalance] = useState<bigint>(BigInt(0));
-  const [estimatedSol, setEstimatedSol] = useState<string>("");
+  const [estimatedSol, setEstimatedSol] = useState<string>("0");
   const [transaction, setTransaction] = useState<any>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [slippageTolerance, setSlippageTolerance] = useState(0.5);
@@ -699,11 +701,45 @@ const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, reserveToken,
   const [minSolOut, setMinSolOut] = useState<string>("");
   const [minTokensOut, setMinTokensOut] = useState<string>("");
 
+  // State for Raydium SDK info
+  const [sdkPlatformInfo, setSdkPlatformInfo] = useState<any>(null);
+
   const publicKey = walletProvider?.publicKey;
   const walletIdentifier = useMemo(() => {
     return publicKey ? publicKey.toString() : null;
   }, [publicKey]);
 
+  const RAYDIUM_LAUNCHPAD_PROGRAM_ID = process.env.NEXT_PUBLIC_RAYDIUM_LAUNCHPAD_PROGRAM_ID || 'LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP';
+  const RAYDIUM_PLATFORM_ID_ENV = process.env.NEXT_PUBLIC_RAYDIUM_PLATFORM_ID;
+
+  useEffect(() => {
+    const fetchPlatformData = async () => {
+      if (!RAYDIUM_PLATFORM_ID_ENV) {
+        console.error("Raydium Platform ID not found in environment variables.");
+        setSdkPlatformInfo(null);
+        return;
+      }
+
+      try {
+        const raydium = await initSdk();
+        const platformIdPublicKey = new PublicKey(RAYDIUM_PLATFORM_ID_ENV);
+        
+        const platformDataAccount = await raydium.connection.getAccountInfo(platformIdPublicKey);
+        if (platformDataAccount) {
+          const platformInfoData = PlatformConfig.decode(platformDataAccount.data);
+          setSdkPlatformInfo(platformInfoData);
+        } else {
+          console.error("Failed to fetch platform data account for Raydium using Platform ID from ENV.");
+          setSdkPlatformInfo(null);
+        }
+      } catch (error) {
+        console.error("Error fetching Raydium SDK platform info using ENV Platform ID:", error);
+        setSdkPlatformInfo(null);
+      }
+    };
+
+    fetchPlatformData();
+  }, [RAYDIUM_PLATFORM_ID_ENV]);
   
 
   useEffect(() => {
@@ -727,134 +763,106 @@ const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, reserveToken,
     fetchTokenBalance();
   }, [tokenMint, walletIdentifier, transaction]);
   
-  const calculateSolValue = useCallback((tokenAmount: number) => {
-    // Implements the sell function calculation using area under the curve
+  const updateEstimatedOutputs = useCallback(async (currentInputBN: BN, currentTab: string) => {
+    if (!sdkPlatformInfo || !tokenMint || currentInputBN.isZero() || currentInputBN.isNeg()) {
+      if (currentTab === "BUY") {
+        setTokenAmount("0");
+        setMinTokensOut("");
+      } else {
+        setEstimatedSol("0");
+        setMinSolOut("");
+      }
+      return;
+    }
+
     try {
-        const EXPONENT = 4.62;
-        const PROPORTION_BASE = 2.26;
-        const PROPORTION_EXP = 39;
-        const MIN_PRICE = 3.5e-8;
-        const FEE_PERCENTAGE = 2.0;
-        
-        // Verify input
-        if (tokenAmount <= 0) return "0";
-        console.log('Token Amount:', reserveToken);
-        // Convert to proper units (9 decimals)
-        const reserveTokenBig = BigInt(reserveToken);
-        const totalSupply = BigInt("1000000000000000000");
-        
-        // Check if operation is valid
-        if (totalSupply <= reserveTokenBig) return "0";
-        
-        // Calculate tokens_sold (tokens in circulation) with careful decimal handling
-        const currentTokensSold = Number(totalSupply - reserveTokenBig) / 1_000_000_000.0;
-        const tokensToSell = tokenAmount / 1_000_000_000.0;
-        
-        // Calculate new tokens sold after this sale
-        const newTokensSold = currentTokensSold - tokensToSell;
-        
-        // Calculate the integral function for area under the curve
-        const integral = (x: number): number => {
-            return (Math.pow(x, EXPONENT)) / (PROPORTION_BASE * Math.pow(10, PROPORTION_EXP)) + MIN_PRICE * x;
-        };
-        
-        // Calculate SOL to receive based on area under the curve
-        let solReceived;
-        if (newTokensSold <= 0) {
-            // Edge case - selling all tokens or more than exist
-            return "0"; // This would be the reserve SOL in the pool
+      const raydium = await initSdk();
+      const mintA = new PublicKey(tokenMint);
+      const mintB = NATIVE_MINT;
+      const programId = new PublicKey(RAYDIUM_LAUNCHPAD_PROGRAM_ID);
+      const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey;
+      const currentPoolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
+
+      if (!currentPoolInfo) {
+        console.error("Failed to fetch fresh pool info in updateEstimatedOutputs.");
+        if (currentTab === "BUY") {
+            setTokenAmount("0"); setMinTokensOut("");
         } else {
-            // Calculate area under curve between current_tokens_sold and new_tokens_sold
-            const area = integral(currentTokensSold) - integral(newTokensSold);
-            solReceived = area * 1_000_000_000.0; // Convert to lamports
+            setEstimatedSol("0"); setMinSolOut("");
         }
-        
-        // Apply fee
-        const amountBeforeFee = solReceived;
-        const amountOut = amountBeforeFee * (1.0 - FEE_PERCENTAGE / 100.0);
-        
-        // Guard against negative amounts due to precision errors
-        if (amountOut <= 0) return "0";
-        
-        return amountOut.toFixed(9);
-    } catch (error) {
-        console.error('Error calculating SOL value:', error);
-        return "0";
-    }
-}, [reserveToken]);
+        return;
+      }
 
-const calculateTokenValue = useCallback((solAmount: number) => {
-    // Implements the buy function calculation using area under the curve and numerical approximation (fix todos)
-    try {
-        const EXPONENT = 4.62;
-        const PROPORTION_BASE = 2.26;
-        const PROPORTION_EXP = 39;
-        const MIN_PRICE = 3.5e-8;
-        const FEE_PERCENTAGE = 2.0;
-        
-        // Verify input
-        if (solAmount <= 0) return "0";
+      const slippageDecimal = new Decimal(slippageTolerance).div(100);
+      const TOKEN_DECIMALS = 6; // Hardcoded token decimals
+      const SOL_DECIMALS = 9;   // Hardcoded SOL decimals
 
-        console.log('reserveToken', reserveToken)
+      if (currentTab === "BUY") {
+        const res = Curve.buyExactIn({
+          poolInfo: currentPoolInfo,
+          amountB: currentInputBN, 
+          protocolFeeRate: currentPoolInfo.configInfo.tradeFeeRate,
+          platformFeeRate: sdkPlatformInfo.feeRate,
+          curveType: currentPoolInfo.configInfo.curveType,
+          shareFeeRate: new BN(100), 
+        });
+        console.log("Curve.buyExactIn response:", res);
+
+        const expectedTokensSmallestUnit = new Decimal(res.amountA.toString());
         
-        // Convert to proper units
-        const reserveTokenBig = BigInt(reserveToken);
-        const totalSupply = BigInt("1000000000000000000");
+        const expectedTokensDisplay = expectedTokensSmallestUnit.div(new Decimal(10).pow(TOKEN_DECIMALS)).toFixed(TOKEN_DECIMALS);
+        console.log(`Setting tokenAmount (BUY) to: "${expectedTokensDisplay}"`);
+        setTokenAmount(expectedTokensDisplay);
+
+        const minTokensSmallestUnit = expectedTokensSmallestUnit.mul(new Decimal(1).minus(slippageDecimal)).toFixed(0, Decimal.ROUND_DOWN);
+        const minTokensDisplay = new Decimal(minTokensSmallestUnit).div(new Decimal(10).pow(TOKEN_DECIMALS)).toFixed(TOKEN_DECIMALS);
+        console.log(`Setting minTokensOut (BUY) to: "${minTokensDisplay}"`);
+        setMinTokensOut(minTokensDisplay);
+
+      } else { // currentTab === "SELL"
+        const res = Curve.sellExactIn({
+          poolInfo: currentPoolInfo,
+          amountA: currentInputBN, 
+          protocolFeeRate: currentPoolInfo.configInfo.tradeFeeRate,
+          platformFeeRate: sdkPlatformInfo.feeRate,
+          curveType: currentPoolInfo.configInfo.curveType,
+          shareFeeRate: new BN(100), 
+        });
+        console.log("Curve.sellExactIn response:", res);
+
+        const expectedSolLamports = new Decimal(res.amountB.toString());
         
-        // Check if operation is valid
-        if (totalSupply <= reserveTokenBig) return "0";
-        
-        // Calculate current tokens sold (tokens in circulation)
-        const currentTokensSold = Number(totalSupply - reserveTokenBig) / 1_000_000_000.0;
-        
-        // Calculate current price for initial estimate
-        const currentPrice = (EXPONENT * Math.pow(currentTokensSold, EXPONENT - 1.0)) / 
-                           (PROPORTION_BASE * Math.pow(10.0, PROPORTION_EXP)) + MIN_PRICE;
-        
-        // Calculate fees
-        const feeAmount = solAmount * (FEE_PERCENTAGE / 100.0);
-        const adjustedAmount = solAmount - feeAmount;
-        
-        // Define the integral function
-        const integral = (x: number): number => {
-            return (Math.pow(x, EXPONENT)) / (PROPORTION_BASE * Math.pow(10, PROPORTION_EXP)) + MIN_PRICE * x;
-        };
-        
-        // Numerical solution - 3 iterations for sufficient accuracy
-        let tokensToBuy = adjustedAmount / currentPrice; // Initial estimate
-        let newTokensSold = currentTokensSold + tokensToBuy / 1_000_000_000.0;
-        
-        // Perform 3 iterations for better precision
-        for (let i = 0; i < 3; i++) {
-            const area = (integral(newTokensSold) - integral(currentTokensSold)) * 1_000_000_000.0;
-            
-            // If area is close enough to adjustedAmount, break
-            if (Math.abs(area - adjustedAmount) < 0.001) {
-                break;
-            }
-            
-            // Adjust our estimate
-            const scaleFactor = adjustedAmount / area;
-            tokensToBuy *= scaleFactor;
-            newTokensSold = currentTokensSold + tokensToBuy / 1_000_000_000.0;
-        }
-        
-        // Guard against negative or very small amounts
-        if (tokensToBuy <= 0) return "0";
-        
-        return tokensToBuy.toFixed(4);
+        const expectedSolDisplay = expectedSolLamports.div(new Decimal(10).pow(SOL_DECIMALS)).toFixed(SOL_DECIMALS);
+        console.log(`Setting estimatedSol (SELL) to: "${expectedSolDisplay}"`);
+        setEstimatedSol(expectedSolDisplay);
+
+        const minSolLamports = expectedSolLamports.mul(new Decimal(1).minus(slippageDecimal)).toFixed(0, Decimal.ROUND_DOWN);
+        const minSolDisplay = new Decimal(minSolLamports).div(new Decimal(10).pow(SOL_DECIMALS)).toFixed(SOL_DECIMALS);
+        console.log(`Setting minSolOut (SELL) to: "${minSolDisplay}"`);
+        setMinSolOut(minSolDisplay);
+      }
     } catch (error) {
-        console.error('Error calculating token value:', error);
-        return "0";
+      console.error(`Error calculating ${currentTab} outputs via Raydium SDK (inside updateEstimatedOutputs):`, error);
+      if (currentTab === "BUY") {
+        setTokenAmount("0");
+        setMinTokensOut("");
+      } else {
+        setEstimatedSol("0");
+        setMinSolOut("");
+      }
     }
-}, [reserveToken]);
+  }, [tokenMint, sdkPlatformInfo, slippageTolerance, setTokenAmount, setMinTokensOut, setEstimatedSol, setMinSolOut]);
+
 
 const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    setAmount("");
+    setInputValue("");
+    setAmount(new BN(0));
     setActiveButton(null);
     setEstimatedSol("");
     setMinTokensOut("");
+    setTokenAmount("0");
+    setMinSolOut("");
 };
 
 const getButtonOptions = () => {
@@ -863,55 +871,105 @@ const getButtonOptions = () => {
         : ["0.5", "1", "2", "5"]
 };
 
-const handleQuickBuyClick = (value: string) => {
+const handleQuickBuyClick = useCallback((value: string) => {
     setActiveButton(value);
-    
-    if (activeTab === "SELL" && value.includes('%')) {
-      const percentage = parseInt(value) / 100;
-      
-      if (percentage === 1) {
-        setAmount((Number(tokenBalance) / 1_000_000_000).toFixed(2).toString());
-        setTokenAmount(tokenBalance.toString());
-        const solValue = calculateSolValue(Number(tokenBalance));
-        setEstimatedSol((Number(solValue)/1_000_000_000).toFixed(2));
-        setMinSolOut((Number(solValue)*(100-slippageTolerance)/100).toString());
-      } else {
-        const tokenAmount = tokenBalance * BigInt(Math.floor(percentage * 100)) / BigInt(100);
-        setAmount((Number(tokenAmount.toString()) / 1_000_000_000).toFixed(2));
-        setTokenAmount(tokenAmount.toString());
-        const solValue = calculateSolValue(Number(tokenAmount.toString()));
-        setEstimatedSol((Number(solValue)/1_000_000_000).toFixed(2));
-        setMinSolOut((Number(solValue)*(100-slippageTolerance)/100).toString());
-      }
-    } else {
-        setAmount(value);
-        
-        if (activeTab === "BUY") {
-            const tokenValue = calculateTokenValue(Number(value));
-            setMinTokensOut((Number(tokenValue)*(100-slippageTolerance)/100).toFixed(4));
-            setTokenAmount(tokenValue);
-        } else {
-            setTokenAmount(value.toString());
-            setEstimatedSol("");
-            setMinSolOut("");
-        }
-    }
-};
+    let newAmountBN: BN;
+    let inputDisplayValue = value;
 
-const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newAmount = e.target.value;
-    setAmount(newAmount);
+    const TOKEN_DECIMALS = 6; // Hardcoded - Re-added
+    const SOL_DECIMALS = 9;   // Hardcoded - Re-added
+
+    if (activeTab === "BUY") { 
+        const solAmount = parseFloat(value);
+        if (!isNaN(solAmount) && solAmount >= 0) {
+            newAmountBN = new BN(new Decimal(solAmount).mul(new Decimal(10).pow(SOL_DECIMALS)).toFixed(0));
+            setAmount(newAmountBN);
+            setInputValue(value); 
+            updateEstimatedOutputs(newAmountBN, activeTab);
+            setEstimatedSol(""); setMinSolOut(""); 
+      } else {
+             setAmount(new BN(0)); setInputValue("0"); updateEstimatedOutputs(new BN(0), activeTab);
+        }
+    } else { // activeTab === "SELL"
+        if (value.includes('%')) {
+            const percentage = parseInt(value) / 100;
+            const sellAmountSmallestUnits = new Decimal(tokenBalance.toString()).mul(percentage).toDP(0, Decimal.ROUND_DOWN);
+            newAmountBN = new BN(sellAmountSmallestUnits.toFixed(0));
+            inputDisplayValue = sellAmountSmallestUnits.div(new Decimal(10).pow(TOKEN_DECIMALS)).toFixed(TOKEN_DECIMALS);
+    } else {
+            const tokenSellAmount = parseFloat(value); 
+            if (!isNaN(tokenSellAmount) && tokenSellAmount >= 0) {
+                newAmountBN = new BN(new Decimal(tokenSellAmount).mul(new Decimal(10).pow(TOKEN_DECIMALS)).toFixed(0));
+        } else {
+                newAmountBN = new BN(0); inputDisplayValue = "0";
+            }
+        }
+        setAmount(newAmountBN);
+        setInputValue(inputDisplayValue);
+        updateEstimatedOutputs(newAmountBN, activeTab);
+        setTokenAmount("0"); setMinTokensOut(""); 
+    }
+}, [activeTab, tokenBalance, updateEstimatedOutputs, setAmount, setInputValue, setActiveButton, setTokenAmount, setMinTokensOut, setEstimatedSol, setMinSolOut]);
+
+// useEffect for debouncing calls to updateEstimatedOutputs when inputValue changes
+useEffect(() => {
+  // If inputValue is empty or represents zero, reset outputs and don't debounce a call
+  const numericValue = parseFloat(inputValue);
+  if (inputValue.trim() === "" || numericValue === 0 || isNaN(numericValue)) {
+    if (activeTab === "BUY") {
+      setTokenAmount("0");
+      setMinTokensOut("");
+    } else {
+      setEstimatedSol("0");
+      setMinSolOut("");
+    }
+    return;
+  }
+
+  const handler = setTimeout(() => {
+    // 'amount' state should already be updated by handleInputChange with the BN value of inputValue
+    if (amount && !amount.isZero() && !amount.isNeg()) {
+      console.log(`Debounced query running for tab: ${activeTab}, amount: ${amount.toString()}, input: ${inputValue}`);
+      updateEstimatedOutputs(amount, activeTab);
+    }
+  }, 300); // 300ms debounce delay
+
+  return () => {
+    clearTimeout(handler);
+  };
+}, [inputValue, amount, activeTab, updateEstimatedOutputs, setTokenAmount, setMinTokensOut, setEstimatedSol, setMinSolOut]);
+
+const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const currentInputString = e.target.value;
+    setInputValue(currentInputString);
     setActiveButton(null);
     
-    if (activeTab === "SELL" && !isNaN(Number(newAmount))) {
-      setTokenAmount((Number(newAmount)*1_000_000_000).toString());
-      setEstimatedSol(calculateSolValue(Number(newAmount)*1_000_000_000));
-      setMinSolOut((Number(estimatedSol)*(100-slippageTolerance)/100).toString());
+    const TOKEN_DECIMALS = 6; // Hardcoded - Re-added
+    const SOL_DECIMALS = 9;   // Hardcoded - Re-added
+
+    const numericValue = parseFloat(currentInputString);
+
+    if (isNaN(numericValue) || numericValue < 0) {
+        setAmount(new BN(0));
+        setInputValue(currentInputString); 
+        if (activeTab === "BUY") {
+            setTokenAmount("0"); setMinTokensOut("");
     } else {
-      setEstimatedSol("");
-      setMinTokensOut("");
+            setEstimatedSol("0"); setMinSolOut("");
+        }
+        return;
     }
-  };
+
+    let newAmountBN: BN;
+    if (activeTab === "BUY") { 
+        newAmountBN = new BN(new Decimal(numericValue).mul(new Decimal(10).pow(SOL_DECIMALS)).toFixed(0));
+        setEstimatedSol(""); setMinSolOut("");
+    } else { 
+        newAmountBN = new BN(new Decimal(numericValue).mul(new Decimal(10).pow(TOKEN_DECIMALS)).toFixed(0));
+        setTokenAmount("0"); setMinTokensOut("");
+    }
+    setAmount(newAmountBN);
+}, [activeTab, setAmount, setInputValue, setActiveButton, setTokenAmount, setMinTokensOut, setEstimatedSol, setMinSolOut]);
   
 
   const handleTransaction = useCallback(async () => {
@@ -940,41 +998,127 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         liquidity = true;
       } else {
         // Calculate minimum tokens out for BUY or minimum SOL out for SELL based on slippage
-        let minTokensOutValue, minSolOutValue;
+        // let minTokensOutValue, minSolOutValue;
         
-        if (activeTab === "BUY" && minTokensOut) {
-          minTokensOutValue = Math.floor(parseFloat(minTokensOut) * 1_000_000_000);
-          console.log('Min Tokens Out Value:', minTokensOutValue.toString());
-        } else if (activeTab === "SELL" && minSolOut) {
-          minSolOutValue = Math.floor(parseFloat(minSolOut));
-          console.log('Min Sol Out Value:', minSolOutValue.toString());
-        }
+        // if (activeTab === "BUY" && minTokensOut) {
+        //   minTokensOutValue = Math.floor(parseFloat(minTokensOut) * 1_000_000);
+        //   console.log('Min Tokens Out Value:', minTokensOutValue.toString());
+        // } else if (activeTab === "SELL" && minSolOut) {
+        //   minSolOutValue = Math.floor(parseFloat(minSolOut));
+        //   console.log('Min Sol Out Value:', minSolOutValue.toString());
+        // }
 
-        const endpoint = activeTab === "BUY" 
-          ? `${API_URL}/api/${tokenMint}/buy?amount=${amount}`
-          : `${API_URL}/api/${tokenMint}/sell?amount=${tokenAmount}`;
+        // const endpoint = activeTab === "BUY" 
+        //   ? `${API_URL}/api/${tokenMint}/buy?amount=${amount}`
+        //   : `${API_URL}/api/${tokenMint}/sell?amount=${tokenAmount}`;
   
-        transactionResponse = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            account: walletProvider.publicKey?.toBase58(),
-            minTokensOut: new BN(minTokensOutValue?.toString() || 0).toString(),
-            minSolOut: new BN(minSolOutValue?.toString() || 0).toString()
-          }),
-        });
+        // transactionResponse = await fetch(endpoint, {
+        //   method: 'POST',
+        //   headers: {
+        //     'Content-Type': 'application/json',
+        //   },
+        //   body: JSON.stringify({
+        //     account: walletProvider.publicKey?.toBase58(),
+        //     minTokensOut: new BN(minTokensOutValue?.toString() || 0).toString(),
+        //     minSolOut: new BN(minSolOutValue?.toString() || 0).toString()
+        //   }),
+        // });
       }
   
-      if (!transactionResponse.ok) {
-        throw new Error('Failed to create transaction');
-      }
+      // if (!transactionResponse.ok) {
+      //   throw new Error('Failed to create transaction');
+      // }
   
-      const { transaction: serializedTransaction, message } = await transactionResponse.json();
+      // const { transaction: serializedTransaction, message } = await transactionResponse.json();
       
-      const transaction = Transaction.from(Buffer.from(serializedTransaction, 'base64'));
+      // const transaction = Transaction.from(Buffer.from(serializedTransaction, 'base64'));
+
+      const transaction = new Transaction();
+
+      const raydium = await initSdk()
+
+      const mintA = new PublicKey(tokenMint)
+      const mintB = NATIVE_MINT
+
+      const programId = new PublicKey ('LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP') // devnet: DEV_LAUNCHPAD_PROGRAM
+
+      const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey
+      const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
+      const data = await raydium.connection.getAccountInfo(poolInfo.platformId)
+      const platformInfo = PlatformConfig.decode(data!.data)
+
+      const slippage = new BN(slippageTolerance*100)
+
+      if (activeTab === "BUY") {
+        
+        // const res = Curve.buyExactIn({
+        //   poolInfo,
+        //   amountB: new BN(amount.toString()),
+        //   protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+        //   platformFeeRate: platformInfo.feeRate,
+        //   curveType: poolInfo.configInfo.curveType,
+        //   shareFeeRate: new BN(100),
+        // })
+        // console.log(
+        //   'expected out amount: ',
+        //   res.amountA.toString(),
+        //   'minimum out amount: ',
+        //   new Decimal(res.amountA.toString()).mul((10000 - slippage.toNumber()) / 10000).toFixed(0)
+        // )
       
+        // Raydium UI usage: https://github.com/raydium-io/raydium-ui-v3-public/blob/master/src/store/useLaunchpadStore.ts#L563
+        const { transaction: tx } = await raydium.launchpad.buyToken({
+          programId,
+          mintA,
+          // mintB: poolInfo.configInfo.mintB, // optional, default is sol
+          // minMintAAmount: res.amountA, // optional, default sdk will calculated by realtime rpc data
+          slippage,
+          configInfo: poolInfo.configInfo,
+          platformFeeRate: platformInfo.feeRate,
+          txVersion: TxVersion.LEGACY,
+          buyAmount: new BN(amount.toString()),
+          // shareFeeReceiver, // optional
+          // shareFeeRate,  // optional, do not exceed poolInfo.configInfo.maxShareFeeRate
+      
+          // computeBudgetConfig: {
+          //   units: 600000,
+          //   microLamports: 600000,
+          // },
+        })
+
+        transaction.add(tx)
+      } else {
+        // const res = Curve.sellExactIn({
+        //   poolInfo,
+        //   amountA: new BN(amount.toString()),
+        //   protocolFeeRate: poolInfo.configInfo.tradeFeeRate,
+        //   platformFeeRate: platformInfo.feeRate,
+        //   curveType: poolInfo.configInfo.curveType,
+        //   shareFeeRate: new BN(100),
+        // })
+        // console.log(
+        //   'expected out amount: ',
+        //   res.amountB.toString(),
+        //   'minimum out amount: ',
+        //   new Decimal(res.amountB.toString()).mul((10000 - slippage.toNumber()) / 10000).toFixed(0)
+        // )
+      
+        // Raydium UI usage: https://github.com/raydium-io/raydium-ui-v3-public/blob/master/src/store/useLaunchpadStore.ts#L637
+        const { transaction:tx } = await raydium.launchpad.sellToken({
+          programId,
+          mintA,
+          // mintB, // default is sol
+          configInfo: poolInfo.configInfo,
+          platformFeeRate: platformInfo.feeRate,
+          txVersion: TxVersion.LEGACY,
+          sellAmount: new BN(amount.toString()),
+        })
+
+        transaction.add(tx)
+      }
+
+      transaction.feePayer = walletProvider.publicKey
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
       
       const signature = await walletProvider.sendTransaction(transaction, connection, {
         skipPreflight: false,
@@ -1031,7 +1175,7 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       });
     } finally {
       setIsLoading(false);
-      setAmount("");
+      setAmount(new BN(0));
       setTokenAmount("");
       setEstimatedSol("");
       setMinTokensOut("");
@@ -1064,32 +1208,31 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
             <TabPanel value="BUY" className="p-0">
               <div className="flex flex-col gap-4 mt-4">
                 <div className="relative">
-                  <div className="text-xs text-gray-400 mb-1">
-                    Amount {activeTab === "SELL" && `(Available: ${(Number(tokenBalance) / 1_000_000_000).toFixed(2)})`}
-                  </div>
-                  {/*@ts-ignore*/}
+                  {/* <div className="text-xs text-gray-400 mb-1">
+                    Amount {activeTab === "SELL" && `(Available: ${(Number(tokenBalance) / 1_000_000).toFixed(2)})`}
+                  </div> */}
                   <div className="flex">
+                    {/*@ts-ignore*/}
                   <Input
-                    onPointerEnterCapture={() => {}}
-                    onPointerLeaveCapture={() => {}}
-                    crossOrigin={undefined}
+                    // onPointerEnterCapture={() => {}}
+                    // onPointerLeaveCapture={() => {}}
+                    // crossOrigin={undefined}
                     type="number"
-                    value={amount}
-                    onChange={(e) => handleAmountChange(e)}
+                    value={inputValue}
+                    onChange={handleInputChange}
                     className="!text-white bg-[#181816] rounded-lg w-[510px] pr-20"
                     containerProps={{
                       className: "!min-w-0 flex items-center gap-2"
                     }}
                     icon={
                       <div className="absolute right-2 text-gray-400">
-                        {activeTab === "SELL" ? tokenSymbol : "SOL"}
+                        {"SOL"}
                       </div>
                     }
                   />
+                  {/*@ts-ignore*/}
                   <IconButton
-                    placeholder=""
-                    onPointerEnterCapture={() => {}}
-                    onPointerLeaveCapture={() => {}}
+                    placeholder="0"
                     variant="text"
                     className="bg-white/10 text-white rounded-full hover:bg-white/20 transition-all duration-200"
                     onClick={() => setIsSettingsOpen(true)}
@@ -1098,26 +1241,17 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                   </IconButton>
                   </div>
                   
-                  {tokenAmount && tokenAmount !== "0" && activeTab === "BUY" && (
+                  {tokenAmount && tokenAmount !== "0" && (
                     <div className="text-xs text-gray-400 mt-1">
                       ≈ {Number(tokenAmount).toFixed(4)} {tokenSymbol}
                     </div>
                   )}
-                  {minTokensOut && activeTab === "BUY" && (
+                  {minTokensOut && (
                     <div className="text-xs text-gray-400 mt-1">
                       Minimum received: {minTokensOut} {tokenSymbol} (slippage: {slippageTolerance}%)
                     </div>
                   )}
-                  {estimatedSol && activeTab === "SELL" && (
-                    <div className="text-xs text-gray-400 mt-1">
-                      ≈ {estimatedSol} SOL
-                    </div>
-                  )}
-                  {minSolOut && activeTab === "SELL" && (
-                    <div className="text-xs text-gray-400 mt-1">
-                      Minimum received: {minSolOut} SOL (slippage: {slippageTolerance}%)
-                    </div>
-                  )}
+                  
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {getButtonOptions().map((value) => (
@@ -1153,15 +1287,15 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
               <div className="flex flex-col gap-4 mt-4">
                 <div className="relative">
                   <div className="text-xs text-gray-400 mb-1">
-                    Amount (Available: {(Number(tokenBalance) / 1_000_000_000).toFixed(2)})
+                    Amount (Available: {(Number(tokenBalance) / 1_000_000).toFixed(2)})
                   </div>
                   {/*@ts-ignore*/}
                   <div className="flex">
                       {/*@ts-ignore*/}
                   <Input
                     type="number"
-                    value={amount}
-                    onChange={handleAmountChange}
+                    value={inputValue}
+                    onChange={handleInputChange}
                     className="!text-white bg-[#181816] rounded-lg w-[510px] pr-20"
                     containerProps={{
                       className: "!min-w-0 flex items-center gap-2"
@@ -1177,14 +1311,13 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                     onFocus={(e) => e.target.select()}
                     icon={
                       <span className="absolute right-2 text-gray-400">
-                        {activeTab === "SELL" ? tokenSymbol : "SOL"}
+                        {tokenSymbol}
                       </span>
                     }
                   />
+                  {/*@ts-ignore*/}
                   <IconButton
-                    placeholder=""
-                    onPointerEnterCapture={() => {}}
-                    onPointerLeaveCapture={() => {}}
+                    placeholder="0"
                     variant="text"
                     className="bg-white/10 text-white rounded-full hover:bg-white/20 transition-all duration-200"
                     onClick={() => setIsSettingsOpen(true)}
@@ -1192,6 +1325,7 @@ const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                     <Cog6ToothIcon className="h-5 w-5" />
                   </IconButton>
                   </div>
+
                   {estimatedSol && (
                     <div className="text-xs text-gray-400 mt-1">
                       ≈ {estimatedSol} SOL
