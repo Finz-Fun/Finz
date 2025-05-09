@@ -17,7 +17,7 @@ export const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID as string);
 export const redisClient = createClient({
     url: REDIS_URL || 'redis://localhost:6379',
     socket: {
-      keepAlive: 30000,
+      keepAlive: true,
       reconnectStrategy: (retries) => {
         if (retries > 20) {
           console.error('Max redis reconnection attempts reached');

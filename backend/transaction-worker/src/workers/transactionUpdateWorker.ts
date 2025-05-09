@@ -13,7 +13,7 @@ interface ParsedTransactionData {
   timestamp: number;
   solAmount: number;
   walletAddress: string;
-  price: number;
+  mcap: number;
   tokenAmount: number;
   signature: string;
 }

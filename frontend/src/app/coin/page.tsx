@@ -768,7 +768,7 @@ const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, reserveToken,
       if (currentTab === "BUY") {
         setTokenAmount("0");
         setMinTokensOut("");
-      } else {
+        } else {
         setEstimatedSol("0");
         setMinSolOut("");
       }
@@ -916,13 +916,13 @@ useEffect(() => {
   // If inputValue is empty or represents zero, reset outputs and don't debounce a call
   const numericValue = parseFloat(inputValue);
   if (inputValue.trim() === "" || numericValue === 0 || isNaN(numericValue)) {
-    if (activeTab === "BUY") {
+        if (activeTab === "BUY") {
       setTokenAmount("0");
       setMinTokensOut("");
-    } else {
+        } else {
       setEstimatedSol("0");
-      setMinSolOut("");
-    }
+            setMinSolOut("");
+        }
     return;
   }
 
