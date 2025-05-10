@@ -39,6 +39,7 @@ import { Cog6ToothIcon } from "@heroicons/react/24/solid";
 import { SettingsModal } from "@/components/ui/SettingsModal";
 import { Curve, PlatformConfig, TxVersion, getPdaLaunchpadPoolId } from "@raydium-io/raydium-sdk-v2";
 import Decimal from 'decimal.js'
+import { e } from "@raydium-io/raydium-sdk-v2/lib/api-7daf490d";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
 const DUMMY_PRIVATE_KEY = process.env.NEXT_PUBLIC_DUMMY_PRIVATE_KEY as string
@@ -956,12 +957,15 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
   
     setIsLoading(true);
     try {
+      let transaction:Transaction;
       let transactionResponse;
       let liquidity = false;
       if (activeTab === "BUY" && !isLiquidityActive) {
         toast({
           title: "Adding Liquidity",
         });
+
+        console.log("amount", amount.toString())
   
         transactionResponse = await fetch(`${API_URL}/create-add-liquidity-transaction`, {
           method: 'POST',
@@ -970,11 +974,19 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
           },
           body: JSON.stringify({
             mintAddress: tokenMint,
-            solAmount: amount,
+            solAmount: amount.toString(),
             account: walletProvider.publicKey?.toBase58(),
           }),
         });
         liquidity = true;
+
+        const { transaction: serializedTransaction, message } = await transactionResponse.json();
+
+        console.log("serializedTransaction", serializedTransaction)
+        if(!serializedTransaction){
+          throw new Error('Failed to create transaction');
+        }
+        transaction = Transaction.from(Buffer.from(serializedTransaction, 'base64'));
       } else {
         // Calculate minimum tokens out for BUY or minimum SOL out for SELL based on slippage
         // let minTokensOutValue, minSolOutValue;
@@ -1002,17 +1014,13 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         //     minSolOut: new BN(minSolOutValue?.toString() || 0).toString()
         //   }),
         // });
-      }
+      
   
       // if (!transactionResponse.ok) {
       //   throw new Error('Failed to create transaction');
       // }
-  
-      // const { transaction: serializedTransaction, message } = await transactionResponse.json();
       
-      // const transaction = Transaction.from(Buffer.from(serializedTransaction, 'base64'));
-
-      const transaction = new Transaction();
+      transaction = new Transaction();
 
       const raydium = await initSdk()
 
@@ -1094,10 +1102,14 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         })
 
         transaction.add(tx)
-      }
 
+        
+      }
       transaction.feePayer = walletProvider.publicKey
       transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
+    }
+
+      
       
       const signature = await walletProvider.sendTransaction(transaction, connection, {
         skipPreflight: false,

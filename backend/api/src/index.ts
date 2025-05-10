@@ -395,7 +395,7 @@ async function generateTweetImage(tweetData: TweetData): Promise<Buffer> {
             </div>
             <span class="ca">${formatWalletAddress(tweetData.ca)}</span>
             <div class="logo">
-              <img src="https://app.finz.fun/logo.png" alt="Logo" />
+              <img src="https://finz.fun/logo.png" alt="Logo" />
             </div>
           </div>
 
@@ -603,7 +603,7 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     // });
     
     // const INITIAL_LIQUIDITY_SOL =Math.floor(parseFloat("0.02") * 1e9); 
-    const buyAmount = Math.floor(parseFloat(solAmount as string) * 1e9); 
+    const buyAmount = Math.floor(parseFloat(solAmount)); 
 
     // const userTokenAccount = await getAssociatedTokenAddress(
     //   mintKeypair.publicKey,
