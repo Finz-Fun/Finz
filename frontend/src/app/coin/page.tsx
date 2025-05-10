@@ -14,11 +14,11 @@ import { getAssociatedTokenAddress, NATIVE_MINT } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { Suspense } from 'react';
-import { getPoolSolBalance,  getPoolTokenBalance,  unsubscribeFromPool } from "@/utils/pool";
+import {   unsubscribeFromPool } from "@/utils/pool";
 import { connection, initSdk } from "@/config";
 import { Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
-import { AiAgent, IDL } from "@/idl/ai_agent";
+
 import { subscribeToPoolTransactions, fetchHistoricalTransactions } from "@/utils/pool";
 import {
   Card,
@@ -85,7 +85,7 @@ function CoinContent() {
   const [poolSolBalance, setPoolSolBalance] = useState<number>(0);
   // const lastPriceRef = useRef<number | null>(null);
   const subscriptionIdRef = useRef<number | null>(null);
-  const programRef = useRef<Program<AiAgent> | null>(null);
+  const programRef = useRef<Program<any> | null>(null);
   const [graduatingMarketCap, setGraduatingMarketCap] = useState<string>("");
   const [migrationStatus, setMigrationStatus] = useState<'pre' | 'during' | 'post'>('pre');
   // const { walletProvider } = useAppKitProvider<Provider>('solana');
@@ -125,23 +125,23 @@ function CoinContent() {
   //   { value: "USDT", label: "USDT", image: "/pngwing.com.png" },
   //   { value: "BTC", label: "BTC", image: "/pngwing.com.png" },
   //   { value: "ETH", label: "ETH", image: "/pngwing.com.png" },
-  // ];
-  useEffect(() => {
-    const fetchPoolBalance = async () => {
-      if (!programRef.current || !tokenMint) return;
+  // // ];
+  // useEffect(() => {
+  //   const fetchPoolBalance = async () => {
+  //     if (!programRef.current || !tokenMint) return;
       
-      try {
-        const balance = await getPoolSolBalance(programRef.current, tokenMint);
-        setPoolSolBalance(balance);
-      } catch (error) {
-        console.log('Error fetching pool balance:', error);
-      }
-    };
+  //     try {
+  //       const balance = await getPoolSolBalance(programRef.current, tokenMint);
+  //       setPoolSolBalance(balance);
+  //     } catch (error) {
+  //       console.log('Error fetching pool balance:', error);
+  //     }
+  //   };
     
-    if (programRef.current) {
-      fetchPoolBalance();
-    }
-  }, [tokenMint, programRef.current]);
+  //   if (programRef.current) {
+  //     fetchPoolBalance();
+  //   }
+  // }, [tokenMint, programRef.current]);
   
   useEffect(() => {
     const fetchPoolData = async () => {
@@ -169,35 +169,34 @@ function CoinContent() {
     fetchPoolData();
   }, [tokenMint]);
   
-  useEffect(() => {
-    try {
-      const dummyWallet = {
-        publicKey: Keypair.fromSecretKey(new Uint8Array(JSON.parse(DUMMY_PRIVATE_KEY))).publicKey,
-        signTransaction: async (tx: any) => tx,
-        signAllTransactions: async (txs: any) => txs,
-      };
+  // useEffect(() => {
+  //   try {
+  //     const dummyWallet = {
+  //       publicKey: Keypair.fromSecretKey(new Uint8Array(JSON.parse(DUMMY_PRIVATE_KEY))).publicKey,
+  //       signTransaction: async (tx: any) => tx,
+  //       signAllTransactions: async (txs: any) => txs,
+  //     };
 
-      const provider = new AnchorProvider(
-        connection,
-        dummyWallet,
-        AnchorProvider.defaultOptions()
-      );
+  //     const provider = new AnchorProvider(
+  //       connection,
+  //       dummyWallet,
+  //       AnchorProvider.defaultOptions()
+  //     );
       
-      const program = new Program<AiAgent>(
-        IDL,
-        provider
-      );
-      programRef.current = program;
-      
-      console.log('Program initialized with wallet:', dummyWallet.publicKey.toString());
-    } catch (error) {
-      console.log('Error initializing program:', error);
-    }
+  //     console.log('Program initialized with wallet:', dummyWallet.publicKey.toString());
+  //   } catch (error) {
+  //     console.log('Error initializing program:', error);
+  //   }
+  // }, []);
+
+  // Add a callback ref to receive data from TradingChart
+  const onTransactionUpdate = useCallback((transaction: OnChainTransaction) => {
+    setTransactions(prev => [transaction, ...prev].slice(0, 100));
   }, []);
 
   useEffect(() => {
     const loadHistoricalAndSubscribe = async () => {
-      if (!programRef.current || !tokenMint) return;
+      if (!tokenMint) return;
 
       try {
         const historical = await fetchHistoricalTransactions(
@@ -206,23 +205,6 @@ function CoinContent() {
         );
         console.log(historical)
         setTransactions(historical as any);
-        if (subscriptionIdRef.current !== null) {
-          unsubscribeFromPool(connection, subscriptionIdRef.current);
-          subscriptionIdRef.current = null;
-        }
-
-        // const subscriptionId = await subscribeToPoolTransactions(
-        //   PROGRAM_ID,
-        //   connection,
-        //   tokenMint.toString(),
-        //   (transaction) => {
-        //     setTransactions(prev => [transaction, ...prev].slice(0, 50));
-        //     setReserveToken(transaction.reserveToken);
-        //     setPoolSolBalance(transaction.reserveSol);
-        //   }
-        // );
-
-        // subscriptionIdRef.current = subscriptionId;
       } catch (error) {
         console.log('Error setting up transactions:', error);
       }
@@ -245,11 +227,11 @@ function CoinContent() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
   
-  const updateReserveTokenAmount = useCallback(async () => {
-    if (!programRef.current || !tokenMint) return;
-    const balance = await getPoolTokenBalance(programRef.current, tokenMint);
-    setReserveToken(parseInt(new BN(balance).toString()));
-  }, [tokenMint]);
+  // const updateReserveTokenAmount = useCallback(async () => {
+  //   if (!programRef.current || !tokenMint) return;
+  //   const balance = await getPoolTokenBalance(programRef.current, tokenMint);
+  //   setReserveToken(parseInt(new BN(balance).toString()));
+  // }, [tokenMint]);
 
   const handleCopyToClipboard = (value: string) => {
     navigator.clipboard
@@ -435,6 +417,7 @@ function CoinContent() {
               tokenMint={tokenMint || ''}
               setMcap={setMcap}
               tokenName={tokenName}
+              onTransactionUpdate={onTransactionUpdate}
             />
           )
         ) : (
@@ -556,10 +539,8 @@ function CoinContent() {
           tokenMint={tokenMint as string} 
           tokenSymbol={tokenSymbol} 
           isLiquidityActive={isLiquidityActive} 
-          reserveToken={reserveToken} 
           setIsLiquidityActive={setIsLiquidityActive} 
           action={action || "BUY"}
-          updateReserveTokenAmount={updateReserveTokenAmount}
         />
         
       </div>
@@ -678,13 +659,11 @@ interface TradingPanelProps {
   tokenMint: string;
   tokenSymbol: string;
   isLiquidityActive: boolean;
-  reserveToken: number;
   setIsLiquidityActive: Dispatch<SetStateAction<boolean>>;
   action: string;
-  updateReserveTokenAmount: () => Promise<void>;
 }
 
-const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, reserveToken, setIsLiquidityActive, action, updateReserveTokenAmount }: TradingPanelProps) => {
+const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, setIsLiquidityActive, action }: TradingPanelProps) => {
   const [activeTab, setActiveTab] = useState(action || "BUY");
   const [amount, setAmount] = useState<BN>(new BN(0));
   const [tokenAmount, setTokenAmount] = useState<string>("0");
@@ -1154,7 +1133,6 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
           title: "Liquidity initialized!",
           description: "Pool is now active for trading",
         });
-        await updateReserveTokenAmount();
       }
 
      

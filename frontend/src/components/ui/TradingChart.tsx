@@ -5,20 +5,38 @@ import { connection, PROGRAM_ID } from '../../config';
 import { subscribeToPoolUpdates, unsubscribeFromPool } from '../../utils/pool';
 import { Candle } from '../../types/trading';
 
-
-
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
+
+interface Transaction {
+  type: 'BUY' | 'SELL';
+  timestamp: number;
+  solAmount: number;
+  walletAddress: string;
+  tokenAmount: number;
+  signature: string;
+}
+
+interface PoolData {
+  price: number;
+  type: 'BUY' | 'SELL';
+  solAmount: number;
+  walletAddress: string;
+  tokenAmount: number;
+  signature: string;
+}
 
 const TradingChart = ({ 
   tokenName, 
   tokenMint, 
   displayCurrency = 'USD', 
-  setMcap 
+  setMcap,
+  onTransactionUpdate
 }: { 
   tokenName?: string,
   tokenMint?: string, 
   displayCurrency: 'USD' | 'SOL',
-  setMcap: Dispatch<SetStateAction<string>> 
+  setMcap: Dispatch<SetStateAction<string>>,
+  onTransactionUpdate?: (transaction: Transaction) => void
 }) => {
 
   if(!tokenName || !tokenMint || !displayCurrency) {
@@ -26,10 +44,11 @@ const TradingChart = ({
   }
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const [solPrice, setSolPrice] = useState<number>(0);
+  const tvWidgetRef = useRef<any>(null);
+  const realtimeCallbackRef = useRef<any>(null);
   const subscriptionIdRef = useRef<number | null>(null);
   const lastCandleRef = useRef<Candle | null>(null);
-  const realtimeCallbackRef = useRef<((bar: any) => void) | null>(null);
+  const [solPrice, setSolPrice] = useState<number>(0);
 
   const SOL_PRICE_CACHE_KEY = 'solana_price_cache';
   const CACHE_DURATION = 10 * 60 * 1000;
@@ -210,10 +229,8 @@ const TradingChart = ({
           try {
             const mintPubkey = new PublicKey(tokenMint);
             const subscriptionId = await subscribeToPoolUpdates(
-              PROGRAM_ID,
-              connection,
               mintPubkey.toString(),
-              (poolData) => {
+              (poolData: PoolData) => {
                 if (displayCurrency === "USD") {
                   setMcap((poolData.price * solPrice).toFixed(2));
                 } else {
@@ -223,8 +240,20 @@ const TradingChart = ({
                 const currentTimestamp = Math.floor(Date.now() / 1000);
                 const price = Number(poolData.price) * (displayCurrency === 'USD' ? solPrice : 1);
 
+                // Share transaction data if callback exists
+                if (onTransactionUpdate) {
+                  onTransactionUpdate({
+                    type: poolData.type,
+                    timestamp: currentTimestamp,
+                    solAmount: poolData.solAmount,
+                    walletAddress: poolData.walletAddress,
+                    tokenAmount: poolData.tokenAmount,
+                    signature: poolData.signature
+                  });
+                }
+
                 if (!lastCandleRef.current || currentTimestamp > lastCandleRef.current.t) {
-                  const newCandle = {
+                  const newCandle: Candle = {
                     t: currentTimestamp,
                     o: price,
                     h: price,
@@ -241,7 +270,7 @@ const TradingChart = ({
                     close: price,
                     volume: 0
                   });
-                } else {
+                } else if (lastCandleRef.current) {
                   const lastCandle = lastCandleRef.current;
                   lastCandle.h = Math.max(lastCandle.h, price);
                   lastCandle.l = Math.min(lastCandle.l, price);
@@ -328,7 +357,7 @@ const TradingChart = ({
       }
       tvWidget.remove();
     };
-  }, [tokenMint, displayCurrency, solPrice, setMcap]);
+  }, [tokenMint, displayCurrency, solPrice, setMcap, onTransactionUpdate]);
 
   useEffect(() => {
     const updateChartPrices = async () => {

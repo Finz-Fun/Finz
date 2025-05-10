@@ -24,10 +24,10 @@ interface ParsedTransactionData {
   tokenMintAddress: string;
   type: 'BUY' | 'SELL';
   timestamp: number;
-  solAmount: number; 
+  solAmount: number;
   walletAddress: string;
   mcap: number; 
-  tokenAmount: number; 
+  tokenAmount: number;
   signature: string;
 }
 
@@ -233,12 +233,12 @@ async function processTransactionForCPIEvent(signature: string) {
 
             // New price calculation based on the formula: (virtual_quote + real_quote_before) / (virtual_base - real_base_before)
             if (decodedCpiEventData.virtual_quote && 
-                decodedCpiEventData.real_quote_before && 
+                decodedCpiEventData.real_quote_after && 
                 decodedCpiEventData.virtual_base && 
-                decodedCpiEventData.real_base_before) {
+                decodedCpiEventData.real_base_after) {
 
-                const numeratorBN = decodedCpiEventData.virtual_quote.add(decodedCpiEventData.real_quote_before);
-                const denominatorBN = decodedCpiEventData.virtual_base.sub(decodedCpiEventData.real_base_before);
+                const numeratorBN = decodedCpiEventData.virtual_quote.add(decodedCpiEventData.real_quote_after);
+                const denominatorBN = decodedCpiEventData.virtual_base.sub(decodedCpiEventData.real_base_after);
 
                 const numeratorVal = numeratorBN.toNumber() / 1e9; // Convert sum of quotes (lamports) to SOL
                 const denominatorVal = denominatorBN.toNumber() / 1e6; // Convert diff of bases (smallest units) to whole tokens (assuming 6 decimals)
