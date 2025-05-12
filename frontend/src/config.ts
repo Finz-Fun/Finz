@@ -4,33 +4,45 @@ export const RPC_URL = (process.env.SOLANA_ENVIRONMENT === 'mainnet') ? process.
 export const connection = new Connection(RPC_URL, 'confirmed');
 export const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID as string);
 
-import { Raydium, TxVersion, parseTokenAccountResp } from '@raydium-io/raydium-sdk-v2'
+import { Owner, Raydium, TxVersion, parseTokenAccountResp } from '@raydium-io/raydium-sdk-v2'
 
 // export const connection = new Connection('<YOUR_RPC_URL>') //<YOUR_RPC_URL>
 
 export const txVersion = TxVersion.LEGACY // or TxVersion.LEGACY
 const cluster = process.env.SOLANA_ENVIRONMENT === 'mainnet' ? 'mainnet' : 'devnet' // 'mainnet' | 'devnet'
 
-let raydium: Raydium | undefined
-export const initSdk = async (params?: { loadToken?: boolean }) => {
+let raydium: any = null;
 
-  console.log(connection.rpcEndpoint)
-  if (raydium) return raydium
-  if (connection.rpcEndpoint === clusterApiUrl('mainnet-beta')){    
-    console.warn('using free rpc node might cause unexpected error, strongly suggest uses paid rpc node')
+export const initSdk = async (params?: { loadToken?: boolean, owner?: PublicKey }) => {
+  console.log(connection.rpcEndpoint);
+  
+  // Force re-initialization if owner changes
+  if (raydium) {
+    console.log('Current owner:', raydium.owner?._owner?.toBase58());
+    if(!raydium.owner){
+      console.log('No owner found, re-initializing SDK');
+      raydium = null;
+    } else if (raydium.owner?._owner && params?.owner && !raydium.owner._owner.equals(params.owner)) {
+      console.log('Owner changed, re-initializing SDK');
+      raydium = null;
+    }
   }
-  console.log(`connect to rpc ${connection.rpcEndpoint} in ${cluster}`)
+
+  if (raydium) return raydium;
+
+  if (connection.rpcEndpoint === clusterApiUrl('mainnet-beta')){    
+    console.warn('using free rpc node might cause unexpected error, strongly suggest uses paid rpc node');
+  }
+  console.log(`connect to rpc ${connection.rpcEndpoint} in ${cluster}`);
+  
   raydium = await Raydium.load({
-    owner: new PublicKey('B1VPbPkEasD3YsUKM3F8fhy9N4NiP4k3b9WzUy7EyWbb'),
+    owner: params?.owner,
     connection,
     cluster,
     disableFeatureCheck: true,
     disableLoadToken: !params?.loadToken,
     blockhashCommitment: 'confirmed',
-    // urlConfigs: {
-    //   BASE_HOST: '<API_HOST>', // api url configs, currently api doesn't support devnet
-    // },
-  })
+  });
 
   /**
    * By default: sdk will automatically fetch token account data when need it or any sol balace changed.
@@ -46,7 +58,9 @@ export const initSdk = async (params?: { loadToken?: boolean }) => {
   })
   */
 
-  return raydium
+  console.log('New owner:', raydium.owner?._owner?.toBase58());
+
+  return raydium;
 }
 
 

@@ -1022,7 +1022,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
       
       transaction = new Transaction();
 
-      const raydium = await initSdk()
+      const raydium = await initSdk({ owner: walletProvider.publicKey })
 
       const mintA = new PublicKey(tokenMint)
       const mintB = NATIVE_MINT
