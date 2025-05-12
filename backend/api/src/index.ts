@@ -1342,11 +1342,27 @@ app.get('/api/tokens/creator/:creatorId', async (req: Request, res: Response) =>
       username: string;
     }
     const tokens = await Token.find({creator: req.params.creatorId });
-    
+    const raydium = await initSdk();
+    const mintB = NATIVE_MINT;
     const tokenDataPromises = tokens.map(async (token) => {
       try {
         const poolData = await fetchPoolData(token.mintAddress as string);
         const creator = await Creator.findOne({ twitterId: token.creator });
+        const mintA = new PublicKey(token.mintAddress as string);
+        
+        const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey;
+        const r = await raydium.connection.getAccountInfo(poolId);
+        const info = LaunchpadPool.decode(r!.data);
+    
+        const configData = await raydium.connection.getAccountInfo(info.configId);
+        const configInfo = LaunchpadConfig.decode(configData!.data);
+
+        const poolPrice = (Curve.getPrice({
+          poolInfo: info,
+          curveType: configInfo.curveType,
+          decimalA: info.mintDecimalsA,
+          decimalB: info.mintDecimalsB,
+        }).toNumber())*1e9;
         
         return {
           title: token.name,

@@ -40,6 +40,7 @@ interface Token {
   tokenMint: string;
   tweetLink: string;
   username: string;
+  mcap: number;
 }
 const SOL_PRICE_CACHE_KEY = 'solana_price_cache';
 const CACHE_DURATION = 10 * 60 * 1000;
@@ -320,7 +321,7 @@ export default function Profile() {
                     // className="overflow-hidden transform text-white bg-[#1d1d1b] border shadow-[8px_8px_20px_rgba(0,0,0,0.4),8px_8px_20px_rgba(255,255,255,0.08)] 
                     // transition-all duration-300 ease-in-out rounded-md w-[280px] h-[360px] hover:shadow-lg hover:-translate-y-1 group flex flex-col"
                   >
-                    <PricingCard title={item.title} symbol={item.symbol} imageUrl={item.imageUrl} avatarUrl={item.avatarUrl} priceSol={item.priceSol} tokenMint={item.tokenMint} tweetLink={item.tweetLink} username={item.username} solPrice={solPrice}/>
+                    <PricingCard title={item.title} symbol={item.symbol} imageUrl={item.imageUrl} avatarUrl={item.avatarUrl} priceSol={item.priceSol} tokenMint={item.tokenMint} tweetLink={item.tweetLink} username={item.username} solPrice={solPrice} mcap={item.mcap}/>
                   </div>
                 ))}
                </div>)}
