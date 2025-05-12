@@ -7,8 +7,9 @@ import {
   Typography,
   Button,
 } from "@material-tailwind/react";
-export function PricingCard({ title, symbol, imageUrl, avatarUrl, priceSol, tokenMint, tweetLink, username, solPrice }: { title: string, symbol: string, imageUrl: string, avatarUrl: string, priceSol: number, tokenMint: string, tweetLink: string, username: string, solPrice: number }) {
+export function PricingCard({ title, symbol, imageUrl, avatarUrl, priceSol, tokenMint, tweetLink, username, solPrice, mcap }: { title: string, symbol: string, imageUrl: string, avatarUrl: string, priceSol: number, tokenMint: string, tweetLink: string, username: string, solPrice: number, mcap: number }) {
   const router = useRouter();
+  console.log("mcap", mcap);
   const maskUsername = (username: string) => {
     if (username.length <= 6) return username;
     return `${username.slice(0, 3)}...${username.slice(-3)}`;
@@ -43,8 +44,8 @@ export function PricingCard({ title, symbol, imageUrl, avatarUrl, priceSol, toke
               <p className="text-base text-white font-bold">
                 {title} (${symbol})
               </p>
-              {priceSol !== 0 ? <p className="text-sm font-normal text-green-500">
-                Market Cap: ${(priceSol * solPrice).toFixed(2).toString()}
+              {mcap !== 0 ? <p className="text-sm font-normal text-green-500">
+                Market Cap: ${(mcap*solPrice).toFixed(2).toString()}
               </p> : <p className="text-sm font-normal text-green-500">
                 Market Cap: ${(25 * solPrice).toFixed(2).toString()}
               </p>}

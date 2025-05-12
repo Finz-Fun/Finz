@@ -53,6 +53,7 @@ import {
   DEVNET_PROGRAM_ID,
   getPdaLaunchpadConfigId,
   LaunchpadConfig,
+  LaunchpadPool,
 } from '@raydium-io/raydium-sdk-v2'
 import { initSdk } from './config'
 import axios from 'axios';
@@ -1270,13 +1271,31 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
       tokenMint: string;
       tweetLink: string;
       username: string;
+      mcap: number;
     }
     const tokens = await Token.find();
+    const raydium = await initSdk();
+    const mintB = NATIVE_MINT;
     
     const tokenDataPromises = tokens.map(async (token) => {
       try {
         const poolData = await fetchPoolData(token.mintAddress as string);
         const creator = await Creator.findOne({ twitterId: token.creator });
+        const mintA = new PublicKey(token.mintAddress as string);
+        
+        const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey;
+        const r = await raydium.connection.getAccountInfo(poolId);
+        const info = LaunchpadPool.decode(r!.data);
+    
+        const configData = await raydium.connection.getAccountInfo(info.configId);
+        const configInfo = LaunchpadConfig.decode(configData!.data);
+
+        const poolPrice = (Curve.getPrice({
+          poolInfo: info,
+          curveType: configInfo.curveType,
+          decimalA: info.mintDecimalsA,
+          decimalB: info.mintDecimalsB,
+        }).toNumber())*1e9;
         
         return {
           title: token.name,
@@ -1286,7 +1305,8 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
           avatarUrl: creator?.profileImage || '',
           tokenMint: token.mintAddress,
           tweetLink:  `https://x.com/${creator?.username}/status/${token.tweetId}`,
-          username: creator?.username
+          username: creator?.username,
+          mcap: poolPrice
         };
       } catch (error) {
         console.error(`Error fetching data for token ${token.mintAddress}:`, error);

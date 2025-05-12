@@ -23,12 +23,14 @@ interface PoolData {
   walletAddress: string;
   tokenAmount: number;
   signature: string;
+  poolSolBalance: number;
 }
 
 const TradingChart = ({ 
   tokenName, 
   tokenMint, 
   displayCurrency = 'USD', 
+  setPoolSolBalance,
   setMcap,
   onTransactionUpdate
 }: { 
@@ -36,6 +38,7 @@ const TradingChart = ({
   tokenMint?: string, 
   displayCurrency: 'USD' | 'SOL',
   setMcap: Dispatch<SetStateAction<string>>,
+  setPoolSolBalance: Dispatch<SetStateAction<number>>,
   onTransactionUpdate?: (transaction: Transaction) => void
 }) => {
 
@@ -236,7 +239,7 @@ const TradingChart = ({
                 } else {
                   setMcap(poolData.price.toFixed(4));
                 }
-
+                setPoolSolBalance(poolData.poolSolBalance);
                 const currentTimestamp = Math.floor(Date.now() / 1000);
                 const price = Number(poolData.price) * (displayCurrency === 'USD' ? solPrice : 1);
 

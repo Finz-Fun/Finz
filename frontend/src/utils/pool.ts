@@ -237,7 +237,8 @@ async function processTransactionForCPIEvent(signature: string) {
               type: tradeType,
               solAmount: solAmountActual,
               walletAddress: userWalletFromTxLaunchpadIx?.toBase58() || "N/A",
-              tokenAmount: tokenAmountActual
+              tokenAmount: tokenAmountActual,
+              poolSolBalance: decodedCpiEventData.real_quote_after.toNumber() / 1e9
           };
       }
       return null;
@@ -255,6 +256,7 @@ export async function subscribeToPoolUpdates(
     walletAddress: string;
     tokenAmount: number;
     signature: string;
+    poolSolBalance: number;
   }) => void
 ): Promise<number> {
 
@@ -284,7 +286,8 @@ export async function subscribeToPoolUpdates(
           solAmount: update.solAmount,
           walletAddress: update.walletAddress,
           tokenAmount: update.tokenAmount,
-          signature: logsResult.signature
+          signature: logsResult.signature,
+          poolSolBalance: update.poolSolBalance
         });
       }
     },

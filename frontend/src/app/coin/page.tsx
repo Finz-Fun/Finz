@@ -37,7 +37,7 @@ import Zoom from "react-medium-image-zoom";
 import "react-medium-image-zoom/dist/styles.css";
 import { Cog6ToothIcon } from "@heroicons/react/24/solid";
 import { SettingsModal } from "@/components/ui/SettingsModal";
-import { Curve, PlatformConfig, TxVersion, getPdaLaunchpadPoolId } from "@raydium-io/raydium-sdk-v2";
+import { Curve, LaunchpadPool, LaunchpadConfig, PlatformConfig, TxVersion, getPdaLaunchpadPoolId } from "@raydium-io/raydium-sdk-v2";
 import Decimal from 'decimal.js'
 import { e } from "@raydium-io/raydium-sdk-v2/lib/api-7daf490d";
 
@@ -67,6 +67,9 @@ function CoinContent() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const SOL_PRICE_CACHE_KEY = 'solana_price_cache';
   const CACHE_DURATION = 10 * 60 * 1000;
+  const RAYDIUM_LAUNCHPAD_PROGRAM_ID = process.env.NEXT_PUBLIC_RAYDIUM_LAUNCHPAD_PROGRAM_ID || 'LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP';
+  const RAYDIUM_PLATFORM_ID_ENV = process.env.NEXT_PUBLIC_RAYDIUM_PLATFORM_ID_ENV || '6738283888';
+
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -89,7 +92,7 @@ function CoinContent() {
   const programRef = useRef<Program<any> | null>(null);
   const [graduatingMarketCap, setGraduatingMarketCap] = useState<string>("");
   const [migrationStatus, setMigrationStatus] = useState<'pre' | 'during' | 'post'>('pre');
-  // const { walletProvider } = useAppKitProvider<Provider>('solana');
+  const { walletProvider } = useAppKitProvider<Provider>('solana');
 
   const fetchSolPrice = async () => {
     try {
@@ -145,6 +148,40 @@ function CoinContent() {
   // }, [tokenMint, programRef.current]);
   
   useEffect(() => {
+    if(!tokenMint || !walletProvider?.publicKey) return;
+    console.log("from expected output", tokenMint);
+    
+    const fetchPoolPrice = async () => {
+      try {
+        const raydium = await initSdk({ owner: walletProvider.publicKey });
+        console.log("SDK initialized with owner:", raydium.owner?._owner?.toBase58());
+        
+        const mintA = new PublicKey(tokenMint as string);
+        const mintB = NATIVE_MINT;
+        const programId = new PublicKey(RAYDIUM_LAUNCHPAD_PROGRAM_ID);
+        const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey;
+        const r = await raydium.connection.getAccountInfo(poolId);
+        const info = LaunchpadPool.decode(r!.data);
+    
+        const configData = await raydium.connection.getAccountInfo(info.configId);
+        const configInfo = LaunchpadConfig.decode(configData!.data);
+
+        const poolPrice = (Curve.getPrice({
+          poolInfo: info,
+          curveType: configInfo.curveType,
+          decimalA: info.mintDecimalsA,
+          decimalB: info.mintDecimalsB,
+        }).toNumber())*1e9;
+
+        console.log("Pool price:", poolPrice);
+        const solPrice = await fetchSolPrice();
+        setPoolSolBalance(info.realB.toNumber()/1e9);
+        setMcap((poolPrice*solPrice).toFixed(2));
+      } catch (error) {
+        console.log('Error fetching pool price:', error);
+      }
+    };
+
     const fetchPoolData = async () => {
       try {
         const response = await fetch(`${API_URL}/api/${tokenMint}/pool-data`);
@@ -155,20 +192,22 @@ function CoinContent() {
         setImageUrl(data.imageUrl);
         setIsLiquidityActive(data.isLiquidityActive || false);
         setCreatorName(data.creatorName);
-        setMcap(data.mcap);
+        // setMcap(data.mcap);
         setCreatorImageUrl(data.creatorImage);
         setTweetLink(data.tweetLink);
         const graduatingMarketCap = async () => {
           const solPrice = await fetchSolPrice();
-          setGraduatingMarketCap((370* solPrice/1000).toFixed(2));
+          setGraduatingMarketCap((435* solPrice/1000).toFixed(2));
         }
         graduatingMarketCap();
       } catch (error) {
         console.log('Error fetching pool data:', error);
       }
     };
+
+    fetchPoolPrice();
     fetchPoolData();
-  }, [tokenMint]);
+  }, [tokenMint, walletProvider?.publicKey]);
   
   // useEffect(() => {
   //   try {
@@ -213,6 +252,7 @@ function CoinContent() {
 
     loadHistoricalAndSubscribe();
   }, [tokenMint]);
+
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -417,6 +457,7 @@ function CoinContent() {
               displayCurrency={displayCurrency}
               tokenMint={tokenMint || ''}
               setMcap={setMcap}
+              setPoolSolBalance={setPoolSolBalance}
               tokenName={tokenName}
               onTransactionUpdate={onTransactionUpdate}
             />
@@ -1094,6 +1135,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         const { transaction:tx } = await raydium.launchpad.sellToken({
           programId,
           mintA,
+          slippage,
           // mintB, // default is sol
           configInfo: poolInfo.configInfo,
           platformFeeRate: platformInfo.feeRate,

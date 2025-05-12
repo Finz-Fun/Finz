@@ -18,6 +18,7 @@ interface Token {
   tokenMint: string;
   tweetLink: string;
   username: string;
+  mcap: number;
 }
 
 import { useSearch } from "@/context/SearchContext";
@@ -86,7 +87,7 @@ export default function Portal() {
           let comparison = 0;
           switch (sortBy) {
             case 'Market cap':
-              comparison = a.priceSol - b.priceSol;
+              comparison = a.mcap - b.mcap;
               break;
             case 'Creation time':
               comparison = tokens.indexOf(a) - tokens.indexOf(b);
@@ -320,6 +321,7 @@ export default function Portal() {
                         tweetLink={item.tweetLink} 
                         username={item.username} 
                         solPrice={solPrice}
+                        mcap={item.mcap}
                       />
                     </div>
                   ))}
