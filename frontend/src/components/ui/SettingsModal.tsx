@@ -8,7 +8,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ isOpen, onClose, onSave }: SettingsModalProps) {
-  const [slippageTolerance, setSlippageTolerance] = useState<number>(0.5);
+  const [slippageTolerance, setSlippageTolerance] = useState<number>(1);
   const [customSlippage, setCustomSlippage] = useState<string>('');
   const [priorityFee, setPriorityFee] = useState<string | number>('Normal');
   const [customPriorityFee, setCustomPriorityFee] = useState<string>('');
@@ -62,7 +62,7 @@ export function SettingsModal({ isOpen, onClose, onSave }: SettingsModalProps) {
         <div className="mb-6">
           <label className="text-sm text-gray-400 mb-2 block">Slippage Tolerance</label>
           <div className="grid grid-cols-4 gap-2 mb-2">
-            {[0.1, 0.5, 1.0].map((value) => (
+            {[1.0, 3.0, 5.0].map((value) => (
               <button
                 key={value}
                 onClick={() => handleSlippageSelect(value)}
