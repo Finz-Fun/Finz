@@ -2,8 +2,8 @@ import { NextResponse, NextRequest } from "next/server";
 import Wallet from "@/models/wallet";
 import { connectDB } from "@/lib/mongoose";
 
-const INVITE_CODE = "FINZ25";
-
+const INVITE_CODE1 = "FINZ25";
+const INVITE_CODE2 = "F1NZST";
 export async function POST(req: NextRequest) {
   try {
     await connectDB();
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
     
     // Verify invite code
-    if (inviteCode !== INVITE_CODE) {
+    if (inviteCode !== INVITE_CODE1 && inviteCode !== INVITE_CODE2) {
       return NextResponse.json({ 
         success: false,
         message: "Invalid invite code" 
