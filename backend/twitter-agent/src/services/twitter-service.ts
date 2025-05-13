@@ -445,13 +445,24 @@ export class TwitterService {
             });
 
             if (result.success) {
+              // await this.replyToTweet(tweet.id,
+              //   `⏰ Auto-created your token ${autoChoice.name} (${autoChoice.ticker})!\n\n` +
+              //   `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+              //   `Start trading now! 🚀`);
+
               await this.replyToTweet(tweet.id,
-                `⏰ Auto-created your token ${autoChoice.name} (${autoChoice.ticker})!\n\n` +
+                `${autoChoice.name} (${autoChoice.ticker}) has been ⏰ Auto-created!\n\n` +
+                `CA: ${result.tokenMint}\n\n` +
+                `Trade ${autoChoice.ticker} here:\n` +
                 `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-                `Start trading now! 🚀`);
+                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
               
               await this.replyToTweet(tweet.parentTweetId as string,
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n`);
+                `Token: ${autoChoice.name} (${autoChoice.ticker})\n\n` +
+                `CA: ${result.tokenMint}\n\n` +
+                `Trade ${autoChoice.ticker} here:\n` +
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
               
               state.isCompleted = true;
               this.tweetStates.delete(state.parentTweetId);
@@ -523,13 +534,18 @@ export class TwitterService {
                         }
                         
                         await this.replyToTweet(tweet.id,
-                          `🎉 Congratulations! Your token ${choice.name} (${choice.ticker}) has been created!\n\n` +
-                          `Token address: ${result.tokenMint}\n` +
-                          `Trade ${choice.ticker} here:\n https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=mainnet-beta\n\n` +
-                          `Start trading your token now! 🚀`);
+                          `${choice.name} (${choice.ticker}) has been created!\n\n` +
+                `CA: ${result.tokenMint}\n\n` +
+                `Trade ${choice.ticker} here:\n` +
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
                         
                         await this.replyToTweet(tweet.parentTweetId as string,
-                            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=mainnet-beta\n\n`);
+                            `Token: ${choice.name} (${choice.ticker})\n\n` +
+                `CA: ${result.tokenMint}\n\n` +
+                `Trade ${choice.ticker} here:\n` +
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
                         
                         state.isCompleted = true;
                         this.tweetStates.delete(state.parentTweetId);
