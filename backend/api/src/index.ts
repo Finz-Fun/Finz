@@ -1266,7 +1266,6 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
       title: string;
       symbol: string;
       imageUrl: string;
-      priceSol: number;
       avatarUrl: string;
       tokenMint: string;
       tweetLink: string;
@@ -1301,12 +1300,11 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
           title: token.name,
           symbol: token.symbol,
           imageUrl: token.imageUrl,
-          priceSol: poolData.price,
           avatarUrl: creator?.profileImage || '',
           tokenMint: token.mintAddress,
           tweetLink:  `https://x.com/${creator?.username}/status/${token.tweetId}`,
           username: creator?.username,
-          mcap: poolPrice
+          mcap: poolPrice || 30
         };
       } catch (error) {
         console.error(`Error fetching data for token ${token.mintAddress}:`, error);
