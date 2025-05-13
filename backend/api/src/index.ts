@@ -622,9 +622,7 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     // );
 
     // const poolTokenAccount = await getAssociatedTokenAddress(
-    //   mintKeypair.publicKey, 
-    //   poolPda, 
-    //   true
+    //   mint, poolPda, true
     // );
 
 
@@ -662,7 +660,6 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
 
   //  const lamports = await getMinimumBalanceForRentExemptMint(connection);
 
-    const tx = new Transaction()
     // .add(
     //   SystemProgram.createAccount({
     //     fromPubkey: user,
@@ -687,7 +684,7 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     const configInfo = LaunchpadConfig.decode(configData.data)
     const mintBInfo = await raydium.token.getTokenInfo(configInfo.mintB)
 
-    const { execute, transactions, extInfo } = await raydium.launchpad.createLaunchpad({
+    const { transactions} = await raydium.launchpad.createLaunchpad({
       programId,
       mintA,
       decimals: 6,
@@ -700,11 +697,12 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
       // configInfo, // optional, sdk will get data by configId if not provided
       mintBDecimals: mintBInfo.decimals, // default 9
       platformId: new PublicKey(platformId),
-      txVersion: TxVersion.LEGACY,
+      txVersion: TxVersion.V0,
       slippage: new BN(100), // means 1%
       buyAmount: new BN(buyAmount),
       createOnly: false, // true means create mint only, false will "create and buy together"
       extraSigners: [mintKeypair],
+      feePayer: user, // ADDED: Ensure the fee payer is correctly set
   
       supply: new BN(1_000_000_000_000_000), // lauchpad mint supply amount, default: LaunchpadPoolInitParam.supply
       totalSellA: new BN(793_100_000_000_000),  // lauchpad mint sell amount, default: LaunchpadPoolInitParam.totalSellA
@@ -722,23 +720,17 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
       // },
     })
 
-    tx.add(...transactions)
-    tx.feePayer = user;
-    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    tx.partialSign(mintKeypair)
+    const createTx = transactions[0] as VersionedTransaction; // Cast to VersionedTransaction for clarity
 
-    const serializedTransaction = tx.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false
-    }).toString('base64');
+
+    const serializedTransactionBytes = createTx.serialize();
+    const serializedCreateTransactionString = Buffer.from(serializedTransactionBytes).toString('base64');
 
     res.json({
       success: true,
-      transaction: serializedTransaction,
+      createTransaction: serializedCreateTransactionString, // Send as base64 string
       message: "Transaction created successfully. Sign and submit to add liquidity and buy tokens.",
-      // initialLiquiditySol: INITIAL_LIQUIDITY_SOL/1e9,
       buyAmountSol: buyAmount / 1e9,
-      tx: tx
     });
 
   } catch (error: any) {

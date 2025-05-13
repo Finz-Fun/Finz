@@ -7,7 +7,7 @@ import { useState, useRef, useEffect, useCallback, Dispatch, SetStateAction, use
 
 import dynamic from "next/dynamic";
 import {  useSearchParams, useRouter } from "next/navigation";
-import {Transaction, Connection} from "@solana/web3.js";
+import {Transaction, Connection, VersionedTransaction} from "@solana/web3.js";
 import {  useAppKitProvider } from "@reown/appkit/react";
 import { Provider } from "@reown/appkit-adapter-solana/react";
 import { getAssociatedTokenAddress, NATIVE_MINT } from "@solana/spl-token";
@@ -998,7 +998,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
   
     setIsLoading(true);
     try {
-      let transaction:Transaction;
+      let transaction:Transaction | VersionedTransaction;
       let transactionResponse;
       let liquidity = false;
       if (activeTab === "BUY" && !isLiquidityActive) {
@@ -1021,13 +1021,13 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         });
         liquidity = true;
 
-        const { transaction: serializedTransaction, message } = await transactionResponse.json();
+        const { createTransaction } = await transactionResponse.json();
+        const transactionBytes = Buffer.from(createTransaction, 'base64');
 
-        console.log("serializedTransaction", serializedTransaction)
-        if(!serializedTransaction){
-          throw new Error('Failed to create transaction');
-        }
-        transaction = Transaction.from(Buffer.from(serializedTransaction, 'base64'));
+        // 2. Deserialize to VersionedTransaction
+        const versionedTransaction = VersionedTransaction.deserialize(transactionBytes);
+
+        transaction = versionedTransaction
       } else {
         // Calculate minimum tokens out for BUY or minimum SOL out for SELL based on slippage
         // let minTokensOutValue, minSolOutValue;
