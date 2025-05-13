@@ -554,7 +554,7 @@ app.post("/create-token", async (req, res) => {
 
 app.post("/create-add-liquidity-transaction", async (req, res) => {
   try {
-    const { mintAddress, solAmount, account} = req.body; 
+    const { mintAddress, account} = req.body; 
 
     const token = await Token.findOne({mintAddress})
     if(!token){
@@ -604,7 +604,6 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     // });
     
     // const INITIAL_LIQUIDITY_SOL =Math.floor(parseFloat("0.02") * 1e9); 
-    const buyAmount = Math.floor(parseFloat(solAmount)); 
 
     // const userTokenAccount = await getAssociatedTokenAddress(
     //   mintKeypair.publicKey,
@@ -697,11 +696,9 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
       // configInfo, // optional, sdk will get data by configId if not provided
       mintBDecimals: mintBInfo.decimals, // default 9
       platformId: new PublicKey(platformId),
-      txVersion: TxVersion.V0,
-      slippage: new BN(100), // means 1%
-      buyAmount: new BN(buyAmount),
-      createOnly: false, // true means create mint only, false will "create and buy together"
-      extraSigners: [mintKeypair],
+      txVersion: TxVersion.LEGACY,
+      buyAmount: new BN(1),
+      createOnly: true, // true means create mint only, false will "create and buy together"
       feePayer: user, // ADDED: Ensure the fee payer is correctly set
   
       supply: new BN(1_000_000_000_000_000), // lauchpad mint supply amount, default: LaunchpadPoolInitParam.supply
@@ -719,18 +716,23 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
       //   microLamports: 46591500,
       // },
     })
+    
+    const createTx = transactions[0]; // Cast to VersionedTransaction for clarity
+    
+    createTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    createTx.partialSign(mintKeypair);
+    const serializedCreateTransaction = createTx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false
+    });
+   
+    const serializedCreateTransactionString = Buffer.from(serializedCreateTransaction).toString('base64');
 
-    const createTx = transactions[0] as VersionedTransaction; // Cast to VersionedTransaction for clarity
-
-
-    const serializedTransactionBytes = createTx.serialize();
-    const serializedCreateTransactionString = Buffer.from(serializedTransactionBytes).toString('base64');
 
     res.json({
       success: true,
       createTransaction: serializedCreateTransactionString, // Send as base64 string
-      message: "Transaction created successfully. Sign and submit to add liquidity and buy tokens.",
-      buyAmountSol: buyAmount / 1e9,
+      message: "Transaction created successfully. Sign and submit to add liquidity.",
     });
 
   } catch (error: any) {

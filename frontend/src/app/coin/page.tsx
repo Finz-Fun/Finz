@@ -7,7 +7,7 @@ import { useState, useRef, useEffect, useCallback, Dispatch, SetStateAction, use
 
 import dynamic from "next/dynamic";
 import {  useSearchParams, useRouter } from "next/navigation";
-import {Transaction, Connection, VersionedTransaction} from "@solana/web3.js";
+import {Transaction, Connection} from "@solana/web3.js";
 import {  useAppKitProvider } from "@reown/appkit/react";
 import { Provider } from "@reown/appkit-adapter-solana/react";
 import { getAssociatedTokenAddress, NATIVE_MINT } from "@solana/spl-token";
@@ -998,7 +998,8 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
   
     setIsLoading(true);
     try {
-      let transaction:Transaction | VersionedTransaction;
+      let transaction:Transaction;
+  
       let transactionResponse;
       let liquidity = false;
       if (activeTab === "BUY" && !isLiquidityActive) {
@@ -1022,44 +1023,12 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         liquidity = true;
 
         const { createTransaction } = await transactionResponse.json();
-        const transactionBytes = Buffer.from(createTransaction, 'base64');
 
-        // 2. Deserialize to VersionedTransaction
-        const versionedTransaction = VersionedTransaction.deserialize(transactionBytes);
-
-        transaction = versionedTransaction
+        if(!createTransaction){
+          throw new Error('Failed to create transaction');
+        }
+        transaction = Transaction.from(Buffer.from(createTransaction, 'base64'));
       } else {
-        // Calculate minimum tokens out for BUY or minimum SOL out for SELL based on slippage
-        // let minTokensOutValue, minSolOutValue;
-        
-        // if (activeTab === "BUY" && minTokensOut) {
-        //   minTokensOutValue = Math.floor(parseFloat(minTokensOut) * 1_000_000);
-        //   console.log('Min Tokens Out Value:', minTokensOutValue.toString());
-        // } else if (activeTab === "SELL" && minSolOut) {
-        //   minSolOutValue = Math.floor(parseFloat(minSolOut));
-        //   console.log('Min Sol Out Value:', minSolOutValue.toString());
-        // }
-
-        // const endpoint = activeTab === "BUY" 
-        //   ? `${API_URL}/api/${tokenMint}/buy?amount=${amount}`
-        //   : `${API_URL}/api/${tokenMint}/sell?amount=${tokenAmount}`;
-  
-        // transactionResponse = await fetch(endpoint, {
-        //   method: 'POST',
-        //   headers: {
-        //     'Content-Type': 'application/json',
-        //   },
-        //   body: JSON.stringify({
-        //     account: walletProvider.publicKey?.toBase58(),
-        //     minTokensOut: new BN(minTokensOutValue?.toString() || 0).toString(),
-        //     minSolOut: new BN(minSolOutValue?.toString() || 0).toString()
-        //   }),
-        // });
-      
-  
-      // if (!transactionResponse.ok) {
-      //   throw new Error('Failed to create transaction');
-      // }
       
       transaction = new Transaction();
 
@@ -1187,12 +1156,66 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
           title: "Liquidity initialized!",
           description: "Pool is now active for trading",
         });
-      }
+
+        const raydium = await initSdk({ owner: walletProvider.publicKey })
+
+      const mintA = new PublicKey(tokenMint)
+      const mintB = NATIVE_MINT
+
+      const programId = new PublicKey ('LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP') // devnet: DEV_LAUNCHPAD_PROGRAM
+
+      const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey
+      const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
+      const data = await raydium.connection.getAccountInfo(poolInfo.platformId)
+      const platformInfo = PlatformConfig.decode(data!.data)
+      const { transaction: tx } = await raydium.launchpad.buyToken({
+        programId,
+        mintA,
+        // mintB: poolInfo.configInfo.mintB, // optional, default is sol
+        // minMintAAmount: res.amountA, // optional, default sdk will calculated by realtime rpc data
+        configInfo: poolInfo.configInfo,
+        platformFeeRate: platformInfo.feeRate,
+        txVersion: TxVersion.LEGACY,
+        buyAmount: new BN(amount.toString()),
+        feePayer: walletProvider.publicKey,
+        // shareFeeReceiver, // optional
+        // shareFeeRate,  // optional, do not exceed poolInfo.configInfo.maxShareFeeRate
+    
+        // computeBudgetConfig: {
+        //   units: 600000,
+        //   microLamports: 600000,
+        // },
+      })
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
+        const sig = await walletProvider.sendTransaction(tx, connection, {
+          skipPreflight: false,
+          maxRetries: 5,
+          preflightCommitment: 'confirmed'
+        });
+    
+        toast({
+          title: "Transaction sent",
+          description: "Confirming transaction...",
+        });
+    
+        const confirmation = await connection.confirmTransaction(sig, 'confirmed');
+    
+        if (confirmation.value.err) {
+          throw new Error('Transaction failed');
+        }
+    
+        console.log("Transaction confirmed:", sig);
+        setTransaction(sig);
+        toast({
+          title: "Transaction successful!",
+            description: "Your transaction has been confirmed",
+          });
+        }
 
      
   
     } catch (error: any) {
-      console.error('Transaction error:', error);
+      console.log('Transaction error:', error);
       
       let errorMessage = 'Transaction failed';
       if (error.logs) {
