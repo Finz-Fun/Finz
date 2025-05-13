@@ -14,6 +14,8 @@ dotenv.config();
 const username = process.env.TWITTER_USERNAME_0;
 const password = process.env.TWITTER_PASSWORD_0;
 
+const SOLANA_ENVIRONMENT = process.env.SOLANA_ENVIRONMENT || 'mainnet-beta';
+
 interface Tweet {
   parentTweetId?: string;
   id: string;
@@ -445,11 +447,11 @@ export class TwitterService {
             if (result.success) {
               await this.replyToTweet(tweet.id,
                 `⏰ Auto-created your token ${autoChoice.name} (${autoChoice.ticker})!\n\n` +
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=mainnet-beta\n\n` +
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
                 `Start trading now! 🚀`);
               
               await this.replyToTweet(tweet.parentTweetId as string,
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=mainnet-beta\n\n`);
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n`);
               
               state.isCompleted = true;
               this.tweetStates.delete(state.parentTweetId);

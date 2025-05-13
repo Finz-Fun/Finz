@@ -1284,7 +1284,6 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
         
           const mintA = new PublicKey(token.mintAddress as string);
           
-          console.log(mintA, mintB)
           const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey;
           const r = await raydium.connection.getAccountInfo(poolId);
           const info = LaunchpadPool.decode(r!.data);
@@ -1310,7 +1309,6 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
             mcap: poolPrice || 30
           };
         } catch (error) {
-          console.error(`Error fetching data for token ${token.mintAddress}:`, error);
           return {
             title: token.name,
             symbol: token.symbol,
@@ -1323,6 +1321,7 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
           };
         }
       } catch (error) {
+        console.error(`Error fetching data for token ${token.mintAddress}:`, error);
         return null;
       }
       
