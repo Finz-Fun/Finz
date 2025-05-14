@@ -66,8 +66,9 @@ export class AiService {
     const lines = text.split('\n').filter(line => line.trim());
 
     for (const line of lines) {
-      const match = line.match(/\d+\.\s*(.+?)\s*\(([A-Z]+)\)/);
-      if (match) {
+      // Match lines ending with "Name (TICKER)" format, optionally ignoring leading list markers
+      const match = line.match(/^(?:(?:\d+\.\s*)|(?:\*\s*))?(.+?)\s+\(([A-Z]+)\)$/);
+      if (match && match[1] && match[2]) { // Ensure both name and ticker are captured
         suggestions.push({
           name: match[1].trim(),
           ticker: match[2].trim()

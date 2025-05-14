@@ -69,8 +69,8 @@ export class TwitterService {
   private lastProcessedTimestamp: number;
   private aiService: AiService;
   private tokenService: TokenService;
-  private readonly MIN_BACKOFF = 120000;  
-  private readonly MAX_BACKOFF = 200000;  
+  private readonly MIN_BACKOFF = 100000;  
+  private readonly MAX_BACKOFF = 150000;  
   private readonly ERROR_MIN_BACKOFF = 30000;  
   private readonly ERROR_MAX_BACKOFF = 90000;
   private readonly SEARCH_TIMEOUT = 4000; // 4 second timeout
