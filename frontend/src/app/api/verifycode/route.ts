@@ -32,12 +32,17 @@ export async function POST(request: Request) {
     const walletToAuthorize = await Wallet.findOne({ walletAddress: walletAddress });
 
     if (!walletToAuthorize) {
-      return NextResponse.json({ message: 'Wallet not found for authorization. Please ensure the wallet is registered.' }, { status: 404 });
+      const newWallet = new Wallet({
+        walletAddress: walletAddress,
+        authorized: true,
+        authorizedAt: new Date(),
+      });
+      await newWallet.save();
+    } else {
+      walletToAuthorize.authorized = true;
+      walletToAuthorize.authorizedAt = new Date();
+      await walletToAuthorize.save();
     }
-
-    walletToAuthorize.authorized = true;
-    walletToAuthorize.authorizedAt = new Date();
-    await walletToAuthorize.save();
 
     return NextResponse.json({ 
       message: 'Invite code verified and wallet authorized successfully',

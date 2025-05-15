@@ -80,7 +80,7 @@ export default function Home() {
       
       const data = await response.json();
       
-      if (data.success) {
+      if (response.status === 200) {
         toast({
           title: "Success",
           description: "Your wallet has been authorized!",
@@ -92,7 +92,7 @@ export default function Home() {
         }, 1500);
       } else {
         toast({
-          title: "Invalid invite code",
+          title: data.message,
           description: "Re-enter or DM us to get code.",
           action: (
             <button
