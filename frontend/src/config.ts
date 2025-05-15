@@ -17,7 +17,7 @@ const cluster = process.env.NEXT_PUBLIC_SOLANA_ENVIRONMENT === 'mainnet' ? 'main
 let raydium: any = null;
 
 export const initSdk = async (params?: { loadToken?: boolean, owner?: PublicKey }) => {
-  console.log(connection.rpcEndpoint);
+  console.log(connectionMainnet.rpcEndpoint);
   
   // Force re-initialization if owner changes
   if (raydium) {
@@ -40,7 +40,7 @@ export const initSdk = async (params?: { loadToken?: boolean, owner?: PublicKey 
   
   raydium = await Raydium.load({
     owner: params?.owner,
-    connection,
+    connection: connectionMainnet,
     cluster,
     disableFeatureCheck: true,
     disableLoadToken: !params?.loadToken,
