@@ -1,55 +1,55 @@
-import { NextResponse, NextRequest } from "next/server";
-import Wallet from "@/models/wallet";
-import { connectDB } from "@/lib/mongoose";
+import { NextResponse } from 'next/server';
+import { connectDB } from '@/lib/mongoose'; 
+import Wallet from '@/models/wallet'; 
+import InviteCode from '@/models/InviteCode'; 
 
-const INVITE_CODE1 = "FINZ25";
-const INVITE_CODE2 = "F1NZST";
-export async function POST(req: NextRequest) {
+export async function POST(request: Request) {
   try {
-    await connectDB();
-    const { inviteCode, walletAddress } = await req.json();
-    console.log(inviteCode,walletAddress)
-    
-    const existingWallet = await Wallet.findOne({ 
-      walletAddress,
-      authorized: true 
-    });
-    
-    if (existingWallet) {
-      return NextResponse.json({ 
-        success: true,
-        message: "Wallet already authorized"
-      });
+    await connectDB(); 
+    const { inviteCode, walletAddress } = await request.json();
+
+    if (!inviteCode || !walletAddress) {
+      return NextResponse.json({ message: 'Invite code and wallet address are required' }, { status: 400 });
     }
-    
-    // Verify invite code
-    if (inviteCode !== INVITE_CODE1 && inviteCode !== INVITE_CODE2) {
-      return NextResponse.json({ 
-        success: false,
-        message: "Invalid invite code" 
-      }, { status: 400 });
+
+    const inviteCodeEntry = await InviteCode.findOne({ name: inviteCode });
+
+    if (!inviteCodeEntry) {
+      return NextResponse.json({ message: 'Invalid invite code' }, { status: 404 });
     }
-    
-    await Wallet.findOneAndUpdate(
-      { walletAddress },
-      {
-        walletAddress,
-        authorized: true,
-        authorizedAt: new Date(),
-        lastUpdated: new Date()
-      },
-      { upsert: true }
-    );
-    
+
+    const walletAlreadyInList = inviteCodeEntry.addresses.includes(walletAddress);
+
+    if (!walletAlreadyInList && inviteCodeEntry.addresses.length >= inviteCodeEntry.limit) {
+      return NextResponse.json({ message: 'Invite code limit reached' }, { status: 403 });
+    }
+
+    if (!walletAlreadyInList) {
+      inviteCodeEntry.addresses.push(walletAddress);
+      await inviteCodeEntry.save();
+    }
+
+    const walletToAuthorize = await Wallet.findOne({ walletAddress: walletAddress });
+
+    if (!walletToAuthorize) {
+      return NextResponse.json({ message: 'Wallet not found for authorization. Please ensure the wallet is registered.' }, { status: 404 });
+    }
+
+    walletToAuthorize.authorized = true;
+    walletToAuthorize.authorizedAt = new Date();
+    await walletToAuthorize.save();
+
     return NextResponse.json({ 
-      success: true,
-      message: "Wallet authorized successfully" 
-    });
+      message: 'Invite code verified and wallet authorized successfully',
+      code: inviteCodeEntry.name,
+      walletAuthorized: walletAddress
+    }, { status: 200 });
+
   } catch (error) {
-    console.error("Error verifying invite code:", error);
-    return NextResponse.json({ 
-      success: false,
-      message: "Server error" 
-    }, { status: 500 });
+    console.error('Error verifying invite code:', error);
+    if (error instanceof Error) {
+      return NextResponse.json({ message: `Server error: ${error.message}` }, { status: 500 });
+    }
+    return NextResponse.json({ message: 'An unknown server error occurred' }, { status: 500 });
   }
 }
