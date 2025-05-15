@@ -19,8 +19,11 @@
     "bs58": "^6.0.0",
     "bullmq": "^5.41.7",
     "dotenv": "^16.4.7",
+    "helius-laserstream": "^0.0.6",
+    "install": "^0.13.0",
     "mongodb": "^6.15.0",
     "mongoose": "^8.11.0",
+    "npm": "^11.3.0",
     "redis": "5.0.1"
   },
   "devDependencies": {

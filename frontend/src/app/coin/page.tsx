@@ -15,7 +15,7 @@ import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { Suspense } from 'react';
 import {   unsubscribeFromPool } from "@/utils/pool";
-import { connection, initSdk } from "@/config";
+import { connection, connectionMainnet, initSdk } from "@/config";
 import { Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
 
@@ -42,7 +42,7 @@ import Decimal from 'decimal.js'
 import { e } from "@raydium-io/raydium-sdk-v2/lib/api-7daf490d";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
-const DUMMY_PRIVATE_KEY = process.env.NEXT_PUBLIC_DUMMY_PRIVATE_KEY as string
+
 
 const TradingChart = dynamic(() => import("../../components/ui/TradingChart"), {
   ssr: false,
@@ -68,7 +68,7 @@ function CoinContent() {
   const SOL_PRICE_CACHE_KEY = 'solana_price_cache';
   const CACHE_DURATION = 10 * 60 * 1000;
   const RAYDIUM_LAUNCHPAD_PROGRAM_ID = process.env.NEXT_PUBLIC_RAYDIUM_LAUNCHPAD_PROGRAM_ID || 'LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP';
-  const RAYDIUM_PLATFORM_ID_ENV = process.env.NEXT_PUBLIC_RAYDIUM_PLATFORM_ID_ENV || '6738283888';
+  // const RAYDIUM_PLATFORM_ID_ENV = process.env.NEXT_PUBLIC_RAYDIUM_PLATFORM_ID_ENV || '6738283888';
 
 
   const router = useRouter();
@@ -186,7 +186,6 @@ function CoinContent() {
       try {
         const response = await fetch(`${API_URL}/api/${tokenMint}/pool-data`);
         const data = await response.json();
-        setReserveToken(Number(new BN(data.reserveToken.toString())));
         setTokenSymbol(data.tokenSymbol);
         setTokenName(data.tokenName);
         setImageUrl(data.imageUrl);
@@ -1117,12 +1116,12 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         
       }
       transaction.feePayer = walletProvider.publicKey
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
+      transaction.recentBlockhash = (await connectionMainnet.getLatestBlockhash()).blockhash
     }
 
       
       
-      const signature = await walletProvider.sendTransaction(transaction, connection, {
+      const signature = await walletProvider.sendTransaction(transaction, connectionMainnet, {
         skipPreflight: false,
         maxRetries: 5,
         preflightCommitment: 'confirmed'
@@ -1133,7 +1132,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         description: "Confirming transaction...",
       });
   
-      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+      const confirmation = await connectionMainnet.confirmTransaction(signature, 'confirmed');
   
       if (confirmation.value.err) {
         throw new Error('Transaction failed');
@@ -1186,8 +1185,8 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
         //   microLamports: 600000,
         // },
       })
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
-        const sig = await walletProvider.sendTransaction(tx, connection, {
+        tx.recentBlockhash = (await connectionMainnet.getLatestBlockhash()).blockhash
+        const sig = await walletProvider.sendTransaction(tx, connectionMainnet, {
           skipPreflight: false,
           maxRetries: 5,
           preflightCommitment: 'confirmed'
@@ -1198,7 +1197,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
           description: "Confirming transaction...",
         });
     
-        const confirmation = await connection.confirmTransaction(sig, 'confirmed');
+        const confirmation = await connectionMainnet.confirmTransaction(sig, 'confirmed');
     
         if (confirmation.value.err) {
           throw new Error('Transaction failed');

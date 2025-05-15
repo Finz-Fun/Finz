@@ -1,34 +1,33 @@
 import { BN, Idl } from '@coral-xyz/anchor';
 import { CompiledInstruction, Connection, Message, MessageAccountKeys, PublicKey } from '@solana/web3.js';
-import { connection } from '../config';
+import { connection, RAYDIUM_PLATFORM_ID, SOLANA_ENVIRONMENT } from '../config';
 import { BorshEventCoder } from '@coral-xyz/anchor';
-import { IDL as LaunchpadIDL } from '../idl/IDL';
+import { IDL as LaunchpadIDL} from '../idl/IDL';
+import { IDL as MainnetLaunchpadIDL } from '../idl/MainnetIDL';
 import bs58 from 'bs58';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URI || 'http://localhost:3000';
-const VIRTUAL_SOL = new BN(25_000_000_000); // 25 SOL in lamports
-const POOL_SEED_PREFIX = "liquidity_pool";
 
 
-const LOG_NOTIFICATION_PROGRAM_ID = new PublicKey("JAwVBJTFd3XgxJ7FmqrZYcoBa9zBgRWErnqevtxg9xiF");
+const LOG_NOTIFICATION_PROGRAM_ID = new PublicKey(RAYDIUM_PLATFORM_ID);
 
 // Program ID of the Raydium Launchpad program itself (used to identify its instructions in the fetched tx)
-const TARGET_LAUNCHPAD_PROGRAM_ID = new PublicKey(LaunchpadIDL.address);
+const TARGET_LAUNCHPAD_PROGRAM_ID = SOLANA_ENVIRONMENT === 'mainnet' ? new PublicKey(MainnetLaunchpadIDL.address) : new PublicKey(LaunchpadIDL.address);
 
 const CPI_EVENT_OUTER_DISCRIMINATOR_HEX = "e445a52e51cb9a1d";
-const launchpadEventCoder = new BorshEventCoder(LaunchpadIDL as Idl);
+const launchpadEventCoder = new BorshEventCoder(SOLANA_ENVIRONMENT === 'mainnet' ? MainnetLaunchpadIDL as Idl : LaunchpadIDL as Idl);
 
 
-interface ParsedTransactionData {
-  tokenMintAddress: string;
-  type: 'BUY' | 'SELL';
-  timestamp: number;
-  solAmount: number;
-  walletAddress: string;
-  mcap: number; 
-  tokenAmount: number;
-  signature: string;
-}
+// interface ParsedTransactionData {
+//   tokenMintAddress: string;
+//   type: 'BUY' | 'SELL';
+//   timestamp: number;
+//   solAmount: number;
+//   walletAddress: string;
+//   mcap: number; 
+//   tokenAmount: number;
+//   signature: string;
+// }
 
 // Adjusted to snake_case to match the actual decoded output from BorshEventCoder
 interface DecodedTradeEventData {

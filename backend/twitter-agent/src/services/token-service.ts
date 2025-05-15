@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const creationSecret = process.env.CREATION_SECRET as string;
+
 export class TokenService {
   private baseUrl: string;
 
@@ -59,7 +61,8 @@ export class TokenService {
             likes,
             creator,
             tweetImage,
-            avatarUrl
+            avatarUrl,
+            creationSecret
           })
         }
       );

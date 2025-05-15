@@ -1,7 +1,8 @@
-import { connection } from './config';
+import { connection, platformId, SOLANA_ENVIRONMENT } from './config';
 import { PublicKey, Message, MessageAccountKeys, CompiledInstruction } from '@solana/web3.js';
 import dotenv from 'dotenv';
 import { IDL as LaunchpadIDL } from './IDL'; // Raydium Launchpad IDL
+import { IDL as MainnetLaunchpadIDL } from './MainnetIDL'; // Raydium Launchpad IDL
 import * as anchor from '@coral-xyz/anchor';
 import bs58 from 'bs58';
 import { priceQueue, transactionQueue } from './queues';
@@ -11,13 +12,13 @@ dotenv.config();
 // The Program ID you want to subscribe to for ANY log activity, to get a transaction signature.
 // This should be an EXECUTABLE program.
 // If JAwV... is the program that is the TARGET of the CPI and emits the event log, this is correct.
-const LOG_NOTIFICATION_PROGRAM_ID = new PublicKey("JAwVBJTFd3XgxJ7FmqrZYcoBa9zBgRWErnqevtxg9xiF");
+const LOG_NOTIFICATION_PROGRAM_ID = platformId;
 
 // Program ID of the Raydium Launchpad program itself (used to identify its instructions in the fetched tx)
-const TARGET_LAUNCHPAD_PROGRAM_ID = new PublicKey(LaunchpadIDL.address);
+const TARGET_LAUNCHPAD_PROGRAM_ID = SOLANA_ENVIRONMENT === 'mainnet' ? new PublicKey(MainnetLaunchpadIDL.address) : new PublicKey(LaunchpadIDL.address);
 
 const CPI_EVENT_OUTER_DISCRIMINATOR_HEX = "e445a52e51cb9a1d";
-const launchpadEventCoder = new anchor.BorshEventCoder(LaunchpadIDL as anchor.Idl);
+const launchpadEventCoder = new anchor.BorshEventCoder(SOLANA_ENVIRONMENT === 'mainnet' ? MainnetLaunchpadIDL as anchor.Idl : LaunchpadIDL as anchor.Idl);
 
 // Interface from user query
 interface ParsedTransactionData {
@@ -190,7 +191,7 @@ async function processTransactionForCPIEvent(signature: string) {
                             console.warn(`[${signature}] Failed to map account index ${idxInInstructionAccounts} for ${launchpadInstructionInvoked}`);
                             return null;
                         };
-
+                        console.log("accNameToIdlIndex", accNameToIdlIndex)
                         if (accNameToIdlIndex.hasOwnProperty('base_token_mint')) {
                            baseMintFromTx = mapAccountIndex(accNameToIdlIndex['base_token_mint']);
                         }
@@ -316,27 +317,53 @@ async function processTransactionForCPIEvent(signature: string) {
     }
 }
 
-// console.log(`Subscribing to logs for program: ${LOG_NOTIFICATION_PROGRAM_ID.toBase58()} on ${connection.rpcEndpoint}`);
+let currentLogsSubscriptionId: number | null = null;
 
-const logsSubscriptionId = connection.onLogs(
-  LOG_NOTIFICATION_PROGRAM_ID,
-  (logsResult, context) => {
-    if (logsResult.err) {
-      return;
+async function startLogSubscription() {
+  if (currentLogsSubscriptionId !== null) {
+    try {
+      console.log(`[Re-subscribing] Attempting to remove previous logs listener: ${currentLogsSubscriptionId}`);
+      await connection.removeOnLogsListener(currentLogsSubscriptionId);
+      currentLogsSubscriptionId = null;
+    } catch (e) {
+      console.error('[Re-subscribing] Error removing previous logs listener:', e);
+      // Continue anway, as the old subscription might be dead.
     }
-    processTransactionForCPIEvent(logsResult.signature);
-  },
-  "confirmed"
-);
+  }
 
-console.log(`Raw logs listener added with ID: ${logsSubscriptionId} for ${LOG_NOTIFICATION_PROGRAM_ID.toBase58()}. Waiting for logs...`);
-console.log(`This will trigger for ANY log from ${LOG_NOTIFICATION_PROGRAM_ID.toBase58()}.`);
+  console.log(`Attempting to subscribe to logs for program: ${LOG_NOTIFICATION_PROGRAM_ID.toBase58()} on ${connection.rpcEndpoint}`);
+  
+  currentLogsSubscriptionId = connection.onLogs(
+    LOG_NOTIFICATION_PROGRAM_ID,
+    (logsResult, context) => {
+      if (logsResult.err) {
+        console.error("Error in logs subscription:", logsResult.err);
+        console.log("Attempting to re-subscribe in 15 seconds due to error...");
+        // Clear the current ID before trying to set up a new one to avoid issues if removeOnLogsListener failed
+        currentLogsSubscriptionId = null; 
+        setTimeout(startLogSubscription, 15000); // Re-subscribe after 15 seconds
+        return;
+      }
+      // console.log("logsResult", logsResult); // Original log line
+      // To avoid too much noise if logs are frequent, consider logging less or a summary
+      console.log(`Received log for signature: ${logsResult.signature} in slot: ${context.slot}`);
+      processTransactionForCPIEvent(logsResult.signature);
+    },
+    "confirmed"
+  );
+
+  console.log(`New logs listener added with ID: ${currentLogsSubscriptionId} for ${LOG_NOTIFICATION_PROGRAM_ID.toBase58()}. Waiting for logs...`);
+}
+
+
+// Initial subscription start
+startLogSubscription();
 
 process.on('SIGINT', async () => {
   console.log('SIGINT received. Cleaning up...');
-  if (logsSubscriptionId) {
+  if (currentLogsSubscriptionId !== null) {
     try {
-      await connection.removeOnLogsListener(logsSubscriptionId);
+      await connection.removeOnLogsListener(currentLogsSubscriptionId);
       console.log('Successfully removed logs listener.');
     } catch (err) {
       console.error('Error removing logs listener:', err);

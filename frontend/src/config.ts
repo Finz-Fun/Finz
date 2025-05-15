@@ -1,15 +1,18 @@
 import { clusterApiUrl, Connection, PublicKey } from '@solana/web3.js';
-export const RPC_URL = (process.env.SOLANA_ENVIRONMENT === 'mainnet') ? process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com';
-
+export const RPC_URL = (process.env.NEXT_PUBLIC_SOLANA_ENVIRONMENT === 'mainnet') ? (process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com') : 'https://api.devnet.solana.com';
+export const HELIUS_RPC_URL = (process.env.NEXT_PUBLIC_SOLANA_ENVIRONMENT === 'mainnet') ? (process.env.NEXT_PUBLIC_HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com') : 'https://api.devnet.solana.com';
 export const connection = new Connection(RPC_URL, 'confirmed');
-export const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID as string);
+export const connectionMainnet = new Connection(HELIUS_RPC_URL, 'confirmed');
+export const RAYDIUM_LAUNCHPAD_PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_RAYDIUM_LAUNCHPAD_PROGRAM_ID as string);
+export const RAYDIUM_PLATFORM_ID = new PublicKey(process.env.NEXT_PUBLIC_RAYDIUM_PLATFORM_ID as string);
+export const SOLANA_ENVIRONMENT = process.env.NEXT_PUBLIC_SOLANA_ENVIRONMENT || 'devnet';
 
 import { Owner, Raydium, TxVersion, parseTokenAccountResp } from '@raydium-io/raydium-sdk-v2'
 
 // export const connection = new Connection('<YOUR_RPC_URL>') //<YOUR_RPC_URL>
 
 export const txVersion = TxVersion.LEGACY // or TxVersion.LEGACY
-const cluster = process.env.SOLANA_ENVIRONMENT === 'mainnet' ? 'mainnet' : 'devnet' // 'mainnet' | 'devnet'
+const cluster = process.env.NEXT_PUBLIC_SOLANA_ENVIRONMENT === 'mainnet' ? 'mainnet' : 'devnet' // 'mainnet' | 'devnet'
 
 let raydium: any = null;
 

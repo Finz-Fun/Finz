@@ -29,7 +29,7 @@ const transactionSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  price: {
+  mcap: {
     type: Number,
     required: true
   },

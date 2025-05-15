@@ -1,23 +1,9 @@
 import express, { Request, Response } from 'express';
-import { Connection, PublicKey, Keypair, sendAndConfirmTransaction, Transaction, SYSVAR_RENT_PUBKEY, SystemProgram, ComputeBudgetProgram, TransactionInstruction, AddressLookupTableProgram, TransactionMessage } from '@solana/web3.js';
-import {TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, mintTo, createMint, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getMinimumBalanceForRentExemptMint, MINT_SIZE, createInitializeMint2Instruction, createMintToInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, NATIVE_MINT, createBurnInstruction, getAssociatedTokenAddressSync, createCloseAccountInstruction, createSetAuthorityInstruction, AuthorityType} from "@solana/spl-token"
-import { Program, AnchorProvider, Wallet, BN } from '@coral-xyz/anchor';
-import {AiAgent, IDL } from './idl/ai_agent';
-import { ASSOCIATED_PROGRAM_ID } from '@coral-xyz/anchor/dist/cjs/utils/token';
-import {actionCorsMiddleware, ACTIONS_CORS_HEADERS, BLOCKCHAIN_IDS} from "@solana/actions"
+import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import {createCloseAccountInstruction, getAssociatedTokenAddress, NATIVE_MINT} from "@solana/spl-token"
+import { BN } from '@coral-xyz/anchor';
+import { actionCorsMiddleware, ACTIONS_CORS_HEADERS, BLOCKCHAIN_IDS } from "@solana/actions"
 import cors from "cors";
-import {
-  createMetadataAccountV3,
-	createV1,
-	findMetadataPda,
-	mplTokenMetadata,
-  TokenStandard,
-} from "@metaplex-foundation/mpl-token-metadata";
-import { mplToolbox } from "@metaplex-foundation/mpl-toolbox";
-import { 
-  createSignerFromKeypair, keypairIdentity, percentAmount, publicKey, signerIdentity } from "@metaplex-foundation/umi";
-import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
-import { base58 } from '@metaplex-foundation/umi/serializers'
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { v4 as uuidv4 } from 'uuid';
 import Creator from './models/creatorSchema';
@@ -27,18 +13,9 @@ import { Token } from './models/tokenSchema';
 import Walletmodel from './models/walletSchema';
 import Mentions from './models/mentionsSchema';
 import { Transaction as TransactionModel } from './models/transactionSchema';
-import { createClient } from 'redis';
-import { 
-  LAMPORTS_PER_SOL,
-  VersionedTransaction,
-} from '@solana/web3.js';
-import { createTransferInstruction } from '@solana/spl-token';
+
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
-// @ts-ignore
-import AmmImpl, { PROGRAM_ID, } from '@mercurial-finance/dynamic-amm-sdk';
-// import { derivePoolAddressWithConfig } from '@meteora-ag/dynamic-amm-sdk/dist/cjs/src/amm/utils';
 import * as dotenv from 'dotenv';
-import mongoose from 'mongoose';
 
 import {
   TxVersion,
@@ -50,13 +27,18 @@ import {
   LAUNCHPAD_PROGRAM,
   ApiV3Token,
   getCpmmPdaAmmConfigId,
-  DEVNET_PROGRAM_ID,
   getPdaLaunchpadConfigId,
   LaunchpadConfig,
   LaunchpadPool,
+  Raydium,
+  API_URLS,
+  LaunchpadConfigInfo,
+  DEVNET_PROGRAM_ID,
+  CREATE_CPMM_POOL_PROGRAM,
 } from '@raydium-io/raydium-sdk-v2'
 import { initSdk } from './config'
 import axios from 'axios';
+import Decimal from 'decimal.js';
 // import Decimal from 'decimal.js'
 
 
@@ -84,18 +66,12 @@ connectCandleDB()
 const PORT = process.env.PORT || 3000;
 
 const SOLANA_RPC_URL = SOLANA_ENVIRONMENT === 'mainnet' ? process.env.MAINNET_RPC_URL as string : (process.env.DEVNET_RPC_URL || 'https://api.devnet.solana.com');
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || '';
-
-const platformWallet = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(WALLET_PRIVATE_KEY)));
-const platformWallet1 = new PublicKey("7tMpmwww2ZXu8kwNXh88tQS72h2eS86LGm5A3cPJbZZx")
+const CREATION_SECRET = process.env.CREATION_SECRET as string;
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
-const readOnlyProvider = new AnchorProvider(connection, new Wallet(platformWallet), {});
+
 const programId = new PublicKey(process.env.PROGRAM_ID as any);
 const platformId = new PublicKey(process.env.PLATFORM_ID as any);
 
-const program = new Program<AiAgent>(IDL, readOnlyProvider);
-const POOL_SEED_PREFIX = "liquidity_pool"
-const SOL_VAULT_PREFIX = "liquidity_sol_vault"
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -442,29 +418,6 @@ async function generateTweetImage(tweetData: TweetData): Promise<Buffer> {
   return image as Buffer;
 }
 
-// Initialize route
-// app.post('/initialize', async (req: Request, res: Response) => {
-//   try {
-//     const tx = new Transaction()
-//     .add(
-//       await program.methods
-//         .initialize(2)
-//         .accounts({
-//           admin: platformWallet.publicKey,
-//         })
-//         .instruction()
-//     )
-//     tx.feePayer = platformWallet.publicKey
-//     tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
-//     console.log(await connection.simulateTransaction(tx))
-//     const sig = await sendAndConfirmTransaction(connection, tx, [platformWallet], { skipPreflight: true })
-//     console.log("Successfully initialized : ", `https://solscan.io/tx/${sig}?cluster=devnet`)
-
-//     res.status(200).send({ message: 'Initialization successful' });
-//   } catch (error:any) {
-//     res.status(500).send({ error: error.message });
-//   }
-// });
 
 
 app.post("/create-token", async (req, res) => {
@@ -488,8 +441,6 @@ app.post("/create-token", async (req, res) => {
       throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
     }
 
-    // const imageBuffer = Buffer.from(image.split(',')[1], 'base64');
-    // const contentType = image.split(';')[0].split(':')[1];
     const contentType = "image/png"
 
     const mintKeypair = Keypair.generate();
@@ -504,6 +455,14 @@ app.post("/create-token", async (req, res) => {
       avatarUrl: String(req.body.avatarUrl),
       ...(req.body.tweetImage && { tweetImage: String(req.body.tweetImage) })
     };
+
+    const creationSecret = req.body.creationSecret
+    if(!creationSecret){
+      throw new Error("Creation secret is required")
+    }
+    if(creationSecret !== CREATION_SECRET){
+      throw new Error("Invalid creation secret")
+    }
     const imageBuffer = await generateTweetImage(tweetData);
 
     const {metadataUri, imageUrl} = await uploadToS3(tokenName as string, symbol as string, imageBuffer, contentType);
@@ -518,23 +477,6 @@ app.post("/create-token", async (req, res) => {
       secretKey: Buffer.from(mintKeypair.secretKey).toString('base64')
     })
 
-    // await mintTo(
-    //   connection,
-    //   platformWallet,
-    //   mint,
-    //   platformTokenAccount.address,
-    //   platformWallet,
-    //   BigInt(TOTAL_SUPPLY.toString())
-    // );
-
-    // await setAuthority(
-    //   connection,
-    //   platformWallet,
-    //   mint,
-    //   0,
-    //   null
-    // );
-    
 
     res.json({
       success: true,
@@ -571,110 +513,24 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
     if(!creator){
       throw new Error("Creator not found")
     }
-    // const umi = createUmi(SOLANA_RPC_URL)
-	  // .use(mplTokenMetadata())
-	  // .use(mplToolbox());
+    
     
     const mintKeypair = Keypair.fromSecretKey(new Uint8Array(mintSecretKey));
-    // const keypair = umi.eddsa.createKeypairFromSecretKey(Uint8Array.from(JSON.parse(WALLET_PRIVATE_KEY)))
-    // const mintpair = umi.eddsa.createKeypairFromSecretKey(mintSecretKey)
     
 
-    // const mintSigner = createSignerFromKeypair(umi, mintpair);
-
-    // umi.use(keypairIdentity(keypair,true))
-
-
-
-    // const platformTokenAccount = await getAssociatedTokenAddress(
-    //   mintKeypair.publicKey,
-    //   platformWallet.publicKey
-    // );
-
-    // const TOTAL_SUPPLY = new BN(1000000000).mul(new BN(10 ** 9))
-
-    // const tokenMetadata = {
-    //   name: token?.name as string,
-    //   symbol: token?.symbol as string,
-    //   uri: token?.metadataUri as string
-    // };
-
-    // const metadataAccountAddress = findMetadataPda(umi, {
-    //   mint: publicKey(mintKeypair.publicKey.toBase58()),
-    // });
-    
-    // const INITIAL_LIQUIDITY_SOL =Math.floor(parseFloat("0.02") * 1e9); 
-
-    // const userTokenAccount = await getAssociatedTokenAddress(
-    //   mintKeypair.publicKey,
-    //   user
-    // );
-
-    // const [poolPda] = PublicKey.findProgramAddressSync(
-    //   [Buffer.from(POOL_SEED_PREFIX), mintKeypair.publicKey.toBuffer()],
-    //   program.programId
-    // );
-
-    // const [poolSolVault] = PublicKey.findProgramAddressSync(
-    //   [Buffer.from(SOL_VAULT_PREFIX), mintKeypair.publicKey.toBuffer()],
-    //   program.programId
-    // );
-
-    // const poolTokenAccount = await getAssociatedTokenAddress(
-    //   mint, poolPda, true
-    // );
-
-
-    // const metadataTx = createV1(umi, {
-    //   mint: mintSigner,
-    //   authority: umi.identity,
-    //   updateAuthority: umi.identity,
-    //   name: tokenMetadata.name,
-    //   symbol: tokenMetadata.symbol,
-    //   uri: tokenMetadata.uri,
-    //   sellerFeeBasisPoints: percentAmount(0),
-    //   tokenStandard: TokenStandard.Fungible,
-    // })
-    
-    // const metadataInstructions = metadataTx.getInstructions().map(umiIx => {
-    //   return new TransactionInstruction({
-    //     keys: umiIx.keys.map(key => ({
-    //       pubkey: new PublicKey(key.pubkey.toString()),
-    //       isSigner: key.isSigner,
-    //       isWritable: key.isWritable
-    //     })),
-    //     programId: new PublicKey(umiIx.programId.toString()),
-    //     data: Buffer.from(umiIx.data)
-    //   });
-    // });
-
-  //   const mintAuthorityInstruction = createSetAuthorityInstruction(
-  //     mintKeypair.publicKey,
-  //     platformWallet.publicKey,
-  //     AuthorityType.MintTokens,
-  //     null
-  // )
-   
-  // createMint(connection, platformWallet, platformWallet.publicKey, null, 9, mintKeypair)
-
-  //  const lamports = await getMinimumBalanceForRentExemptMint(connection);
-
-    // .add(
-    //   SystemProgram.createAccount({
-    //     fromPubkey: user,
-    //     newAccountPubkey: mintKeypair.publicKey,
-    //     space: MINT_SIZE,
-    //     lamports,
-    //     programId: TOKEN_PROGRAM_ID
-    // }),
-    // createInitializeMint2Instruction(mintKeypair.publicKey, 9, platformWallet.publicKey, null, TOKEN_PROGRAM_ID),
-    // createAssociatedTokenAccountInstruction(platformWallet.publicKey, platformTokenAccount, platformWallet.publicKey, mintKeypair.publicKey),
-    // createMintToInstruction(mintKeypair.publicKey, platformTokenAccount, platformWallet.publicKey, BigInt(TOTAL_SUPPLY.toString()))
-    // )
-
-
+   const walletAddress = creator.walletAddress
     // tx.add(...metadataInstructions)    
-    const raydium = await initSdk()
+    const raydium = await Raydium.load({
+      owner: walletAddress ? new PublicKey(walletAddress) : user,
+      connection,
+      cluster: SOLANA_ENVIRONMENT as "mainnet" | "devnet",
+      disableFeatureCheck: true,
+      disableLoadToken: true,
+      blockhashCommitment: 'confirmed',
+      // urlConfigs: {
+      //   BASE_HOST: '<API_HOST>', // api url configs, currently api doesn't support devnet
+      // },
+    })
     const  mintA = mintKeypair.publicKey
     const configId = getPdaLaunchpadConfigId(programId, NATIVE_MINT, 0, 0).publicKey
 
@@ -774,29 +630,6 @@ app.post("/create-add-liquidity-transaction", async (req, res) => {
 
 
 
-
-const fetchPoolData = async (tokenMint:string)=>{
-  try{
-    const VIRTUAL_SOL = new BN(25_000_000_000);
-    const mint = new PublicKey(tokenMint)
-    const [poolPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(POOL_SEED_PREFIX), mint.toBuffer()],
-      program.programId
-    );
-    const stateData = await program.account.liquidityPool.fetch(poolPda)
-    const reserveSol = stateData.reserveSol
-  
-    const totalSolWithVirtual = reserveSol.add(VIRTUAL_SOL);
-    
-    const mcapInSol = parseInt(totalSolWithVirtual.toString())/ parseInt((new BN(1_000_000_000)).toString());
-  
-    return { price:mcapInSol}
-  } catch (error:any) {
-    console.log(error)
-    return { price:0}
-}
-}
-
 const fetchReserveToken = async (tokenMint: string) => {
   try {
     const token = await Token.findOne({ mintAddress: tokenMint });
@@ -804,8 +637,6 @@ const fetchReserveToken = async (tokenMint: string) => {
     if (!token) {
       console.log("Token not found in database:", tokenMint);
       return { 
-        reserveToken: new BN(0), 
-        mcap: 0,
         creatorName: creator?.username,
         creatorImage: creator?.profileImage,
         tweetLink: null,
@@ -817,22 +648,8 @@ const fetchReserveToken = async (tokenMint: string) => {
     }
 
     try {
-      const VIRTUAL_SOL = new BN(25_000_000_000);
-      const mint = new PublicKey(tokenMint);
-      const [poolPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(POOL_SEED_PREFIX), mint.toBuffer()],
-        program.programId
-      );
-      const stateData = await program.account.liquidityPool.fetch(poolPda);
-      const reserveSol = stateData.reserveSol
-  
-      const totalSolWithVirtual = reserveSol.add(VIRTUAL_SOL);
-    
-      const mcapInSol = parseInt(totalSolWithVirtual.toString())/ parseInt((new BN(1_000_000_000)).toString());
       
       return { 
-        reserveToken: stateData.reserveToken,
-        mcap: mcapInSol,
         creatorName: creator?.username,
         creatorImage: creator?.profileImage,
         tweetLink: `https://x.com/${creator?.username}/status/${token.tweetId}`,
@@ -844,8 +661,6 @@ const fetchReserveToken = async (tokenMint: string) => {
     } catch (onChainError) {
       console.log("Failed to fetch on-chain data:", onChainError);
       return { 
-        reserveToken: new BN(0),
-        mcap: 0,
         creatorName: creator?.username,
         creatorImage: creator?.profileImage,
         tweetLink: `https://x.com/${creator?.username}/status/${token.tweetId}`,
@@ -858,8 +673,6 @@ const fetchReserveToken = async (tokenMint: string) => {
   } catch (dbError) {
     console.log("Database error:", dbError);
     return { 
-      reserveToken: new BN(0), 
-      mcap: 0,
       creatorName: null,
       creatorImage: null,
       tweetLink: null,
@@ -876,7 +689,6 @@ app.get('/blinks/:tokenMint', async (req: Request, res: Response) => {
   try {
     const { tokenMint } = req.params;
     const baseHref = `/api/blinks/${tokenMint}`
-    const poolData = await fetchPoolData(tokenMint);
     const token = await Token.findOne({mintAddress:tokenMint})
     const tokenData= {
       title: token?.name,
@@ -889,7 +701,7 @@ app.get('/blinks/:tokenMint', async (req: Request, res: Response) => {
       type: "action",
       title: tokenData.title,
       icon: tokenData.icon, 
-      description: tokenData.description+`\n`+`Current mcap: ${poolData.price} SOL`,
+      description: tokenData.description,  //todo: add mcap
       label: tokenData.label,
       links: {
         actions: [
@@ -979,63 +791,38 @@ app.post('/api/blinks/:tokenMint/buy', async (req: Request, res: Response) => {
     }
 
     const userPubkey = new PublicKey(account);
-    const mint = new PublicKey(tokenMint);
 
-    const userTokenAccount = await getAssociatedTokenAddress(
-      mint,
-      userPubkey,
-      false
-    );
     
-    const [poolPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(POOL_SEED_PREFIX), mint.toBuffer()],
-      program.programId
-    );
-    console.log("poolPda", poolPda)
-    // const [poolSolVault] = PublicKey.findProgramAddressSync(
-    //   [Buffer.from(SOL_VAULT_PREFIX), mint.toBuffer()],
-    //   program.programId
-    // );
+    const mintA = new PublicKey(tokenMint)
+    const mintB = NATIVE_MINT
+ // devnet: DEV_LAUNCHPAD_PROGRAM
+
+      const raydium = await Raydium.load({
+        owner: userPubkey,
+        connection,
+        cluster: SOLANA_ENVIRONMENT as "mainnet" | "devnet",
+        disableFeatureCheck: true,
+        disableLoadToken: true,
+        blockhashCommitment: 'confirmed',
+      })
+      const amountInLamports = Math.floor(parseFloat(amount as string) * 1e9);
+      const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey
+      const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
+      const data = await raydium.connection.getAccountInfo(poolInfo.platformId)
+      const platformInfo = PlatformConfig.decode(data!.data)
+      
+      const { transaction:tx } = await raydium.launchpad.buyToken({
+        programId,
+        mintA,
+        slippage: new BN(100),
+        // mintB, // default is sol
+        configInfo: poolInfo.configInfo,
+
+        platformFeeRate: platformInfo.feeRate,
+        txVersion: TxVersion.LEGACY,
+        buyAmount: new BN(amountInLamports),
+      })
     
-    // const poolTokenAccount = await getAssociatedTokenAddress(
-    //   mint, poolPda, true
-    // );
-
-    const amountInLamports = Math.floor(parseFloat(amount as string) * 1e9);
-
-
-    const tx = new Transaction();
-    
-
-    const tokenAccountInfo = await connection.getAccountInfo(userTokenAccount);
-    console.log("tokenAccountInfo", tokenAccountInfo)
-
-    if (!tokenAccountInfo) {
-      tx.add(
-        createAssociatedTokenAccountInstruction(
-          userPubkey,
-          userTokenAccount,
-          userPubkey,
-          mint
-        )
-      );
-    }
-
-    tx.add(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }),
-      await program.methods
-        .buy(new BN(amountInLamports), new BN(0))
-        .accounts({
-          tokenMint: mint,
-          user: userPubkey,
-          platformFeeWallet1: platformWallet1,
-          creatorFeeWallet: new PublicKey(creator.walletAddress as string)
-        })
-        .instruction()
-    );
-
-    console.log("tx", tx)
     tx.feePayer = userPubkey;
     tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
@@ -1112,7 +899,7 @@ app.post('/api/blinks/:tokenMint/sell', async (req: Request, res: Response) => {
         tokenAmount = rawAmount.muln(sellPercentage);
         sellMessage = `Sell ${tokenBalance.value.uiAmount as number * sellPercentage} tokens (${percentage}% of your balance)`;
       } else {
-        const rawAmount = parseFloat(amount as string) * 1e9;
+        const rawAmount = parseFloat(amount as string) * 1e6;
         tokenAmount = new BN(Math.floor(rawAmount));
         
         if (tokenAmount.gt(new BN(tokenBalance.value.amount))) {
@@ -1120,37 +907,35 @@ app.post('/api/blinks/:tokenMint/sell', async (req: Request, res: Response) => {
         }
         sellMessage = `Sell ${amount} tokens`;
       }
+    
+      const mintB = NATIVE_MINT
+ // devnet: DEV_LAUNCHPAD_PROGRAM
+
+      const raydium = await Raydium.load({
+        owner: userPubkey,
+        connection,
+        cluster: SOLANA_ENVIRONMENT as "mainnet" | "devnet",
+        disableFeatureCheck: true,
+        disableLoadToken: true,
+        blockhashCommitment: 'confirmed',
+      })
+
+      const poolId = getPdaLaunchpadPoolId(programId, mint, mintB).publicKey
+      const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
+      const data = await raydium.connection.getAccountInfo(poolInfo.platformId)
+      const platformInfo = PlatformConfig.decode(data!.data)
       
-      const [poolPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(POOL_SEED_PREFIX), mint.toBuffer()],
-        program.programId
-      );
+      const { transaction:tx } = await raydium.launchpad.sellToken({
+        programId,
+        mintA: mint,
+        slippage: new BN(100),
+        // mintB, // default is sol
+        configInfo: poolInfo.configInfo,
 
-      const [poolSolVault, bump] = PublicKey.findProgramAddressSync(
-        [Buffer.from(SOL_VAULT_PREFIX), mint.toBuffer()],
-        program.programId
-      );
-
-      const poolTokenAccount = await getAssociatedTokenAddress(
-        mint,
-        poolPda,
-        true
-      );
-
-      const tx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }),
-        await program.methods
-          .sell(tokenAmount, bump, new BN(0))
-          .accounts({
-            tokenMint: mint,
-            user: userPubkey,
-            platformFeeWallet1: platformWallet1,
-            creatorFeeWallet: new PublicKey(creator.walletAddress as string)
-          })
-          .instruction()
-      );
-
+        platformFeeRate: platformInfo.feeRate,
+        txVersion: TxVersion.LEGACY,
+        sellAmount: tokenAmount,
+      })
       tx.feePayer = userPubkey;
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
@@ -1176,7 +961,7 @@ app.get('/api/:tokenMint/pool-data', async (req: Request, res: Response) => {
   try {
     const { tokenMint } = req.params;
     const token = await fetchReserveToken(tokenMint);
-    res.json({reserveToken: token.reserveToken.toString(), tokenName:token.tokenName, tokenSymbol:token.tokenSymbol, isLiquidityActive:token.isLiquidityActive, imageUrl:token.imageUrl, creatorName:token.creatorName, mcap:token.mcap.toString(), creatorImage:token.creatorImage, tweetLink:token.tweetLink});
+    res.json({tokenName:token.tokenName, tokenSymbol:token.tokenSymbol, isLiquidityActive:token.isLiquidityActive, imageUrl:token.imageUrl, creatorName:token.creatorName,  creatorImage:token.creatorImage, tweetLink:token.tweetLink});
   } catch (error: any) {
     console.error('Error fetching pool data:', error);
     res.status(500).json({ error: error.message });
@@ -1337,23 +1122,22 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
 
 app.get('/api/tokens/creator/:creatorId', async (req: Request, res: Response) => {
   try {
-
     interface tokenType {
       title: string;
       symbol: string;
       imageUrl: string;
-      priceSol: number;
       avatarUrl: string;
       tokenMint: string;
       tweetLink: string;
       username: string;
+      mcap: number;
     }
+    
     const tokens = await Token.find({creator: req.params.creatorId });
     const raydium = await initSdk();
     const mintB = NATIVE_MINT;
     const tokenDataPromises = tokens.map(async (token) => {
       try {
-        const poolData = await fetchPoolData(token.mintAddress as string);
         const creator = await Creator.findOne({ twitterId: token.creator });
         const mintA = new PublicKey(token.mintAddress as string);
         
@@ -1375,11 +1159,11 @@ app.get('/api/tokens/creator/:creatorId', async (req: Request, res: Response) =>
           title: token.name,
           symbol: token.symbol,
           imageUrl: token.imageUrl,
-          priceSol: poolData.price,
           avatarUrl: creator?.profileImage || '',
           tokenMint: token.mintAddress,
           tweetLink:  `https://x.com/${creator?.username}/status/${token.tweetId}`,
-          username: creator?.username
+          username: creator?.username,
+          mcap: poolPrice || 30
         };
       } catch (error) {
         console.error(`Error fetching data for token ${token.mintAddress}:`, error);
@@ -1528,6 +1312,163 @@ app.get(`/health`, (req: Request, res: Response) => {
   res.send("ok");
 });
 
+
+
+// export const claimPlatformFeeAll = async () => {
+//   const raydium = await initSdk()
+
+//   if (raydium.owner === undefined) {
+//     console.log('please config owner info')
+//     return
+//   }
+
+//   const allPlatformPool = await raydium.connection.getProgramAccounts(
+//     programId,
+//     {
+//       filters: [
+//         { dataSize: LaunchpadPool.span },
+//         { memcmp: { offset: LaunchpadPool.offsetOf('platformId'), bytes: platformId.toString() } },
+//       ],
+//     },
+//   )
+//   console.log('allPlatformPool', allPlatformPool.length)
+
+//   const minClaimVault = 10
+//   const itemRunClaimPool = 100
+
+//   const cacheMintPriceB: { [mint: string]: number } = {}
+//   const cacheConfigInfo: { [configId: string]: LaunchpadConfigInfo } = {}
+
+//   for (let i = 0; i < allPlatformPool.length; i += itemRunClaimPool) {
+//     console.log('item start', i)
+//     const itemPools = allPlatformPool.slice(i, i + itemRunClaimPool)
+
+//     await Promise.all(itemPools.map(async itemPool => {
+//       const poolInfo = LaunchpadPool.decode(itemPool.account.data)
+//       const configId = poolInfo.configId.toString()
+//       if (cacheConfigInfo[configId] === undefined) {
+//         const configInfo = await raydium.connection.getAccountInfo(poolInfo.configId)
+
+//         if (configInfo === null) {
+//           console.log('fetch config info error: ' + JSON.stringify({ poolId: itemPool.pubkey.toString(), configId }))
+//           return
+//         }
+
+//         cacheConfigInfo[configId] = LaunchpadConfig.decode(configInfo.data)
+//       }
+
+//       const mintB = cacheConfigInfo[configId].mintB
+//       const mintBStr = mintB.toString()
+
+//       if (cacheMintPriceB[mintBStr] === undefined) {
+//         const apiPriceUrl = `${API_URLS.BASE_HOST}${API_URLS.MINT_PRICE}` + `?mints=${mintBStr}`
+//         const apiData = await (await fetch(apiPriceUrl)).json()
+//         cacheMintPriceB[mintBStr] = apiData?.data[mintBStr] ?? 0
+//       }
+
+//       const mintPriceB = cacheMintPriceB[mintBStr]
+
+//       const pendingClaim = new Decimal(poolInfo.platformFee.toString()).div(new Decimal(10).pow(poolInfo.mintDecimalsB))
+//       const pendingClaimU = pendingClaim.mul(mintPriceB)
+
+//       if (pendingClaimU.lt(minClaimVault)) {
+//         console.log('pendingClaimU', pendingClaimU)
+//         return
+//       }
+
+//       const { execute, transaction, extInfo, builder } = await raydium.launchpad.claimPlatformFee({
+//         programId, // devnet: DEV_LAUNCHPAD_PROGRAM
+//         platformId,
+//         platformClaimFeeWallet: raydium.ownerPubKey,
+//         poolId: itemPool.pubkey,
+
+//         mintB: NATIVE_MINT,
+//         vaultB: poolInfo.vaultB,
+
+//         txVersion: TxVersion.V0,
+//         // computeBudgetConfig: {
+//         //   units: 600000,
+//         //   microLamports: 600000,
+//         // },
+//       })
+
+//       // printSimulate([transaction])
+
+//       try {
+//         const sentInfo = await execute({ sendAndConfirm: true })
+//         console.log(sentInfo)
+//       } catch (e: any) {
+//         console.log(e)
+//       }
+
+//     }))
+//   }
+
+//   process.exit() // if you don't want to end up node execution, comment this line
+// }
+
+
+// claimPlatformFeeAll()
+
+// export const claimPlatformFee = async () => {
+//   const raydium = await initSdk()
+//   console.log(connection.rpcEndpoint)
+//   const poolId = new PublicKey('9jf1pWTWjvaZCBvuRqnubatBZSdajzaBKnvF9AEM57Ve')
+
+//   const { execute, transaction, extInfo, builder } = await raydium.launchpad.claimPlatformFee({
+//     programId: LAUNCHPAD_PROGRAM, // devnet: DEV_LAUNCHPAD_PROGRAM
+//     platformId,
+//     platformClaimFeeWallet: raydium.ownerPubKey,
+//     poolId,
+
+//     // mintB: NATIVE_MINT,
+//     // vaultB: new PublicKey('4hovbmAKVRCyj6vmBxZ533ntnrUVGkQfwxzdxzewnR47'),
+//     // mintBProgram?: PublicKey;
+
+//     txVersion: TxVersion.V0,
+//     // computeBudgetConfig: {
+//     //   units: 600000,
+//     //   microLamports: 600000,
+//     // },
+//   })
+
+//   //   printSimulate([transaction])
+
+//   try {
+//     const sentInfo = await execute({ sendAndConfirm: true })
+//     console.log(sentInfo)
+//   } catch (e: any) {
+//     console.log(e)
+//   }
+
+//   process.exit() // if you don't want to end up node execution, comment this line
+// }
+
+/** uncomment code below to execute */
+// claimPlatformFee()
+
+// const wallet: Keypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(process.env.WALLET_PRIVATE_KEY as any)))
+// async function unwrapSol(
+//   wallet: Keypair,
+// ): Promise<void> {
+//   const associatedTokenAccount = await getAssociatedTokenAddress(
+//     NATIVE_MINT,
+//     wallet.publicKey
+//   );
+//   console.log(associatedTokenAccount.toBase58())
+//   console.log(wallet.publicKey.toBase58())
+//   const unwrapTransaction = new Transaction().add(
+//       createCloseAccountInstruction(
+//         associatedTokenAccount,
+//           wallet.publicKey,
+//           wallet.publicKey
+//       )
+//   );
+//   await sendAndConfirmTransaction(connection, unwrapTransaction, [wallet]);
+//   console.log("✅ - Step 4: SOL unwrapped");
+// }
+
+// unwrapSol(wallet)
 
 
 

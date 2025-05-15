@@ -5,11 +5,13 @@ import dotenv from 'dotenv'
 
 dotenv.config();
 
-export const owner: Keypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(process.env.WALLET_PRIVATE_KEY as any)))
-// export const connection = new Connection('<YOUR_RPC_URL>') //<YOUR_RPC_URL>
-export const connection = new Connection(clusterApiUrl('devnet')) //<YOUR_RPC_URL>
+const owner: Keypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(process.env.WALLET_PRIVATE_KEY as any)))
+const SOLANA_ENVIRONMENT = process.env.SOLANA_ENVIRONMENT || 'devnet'
+const RPC_URL = SOLANA_ENVIRONMENT === 'mainnet' ? (process.env.MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com") : "https://api.devnet.solana.com"
+export const connection = new Connection(RPC_URL) //<YOUR_RPC_URL>
+// export const connection = new Connection(clusterApiUrl('devnet')) //<YOUR_RPC_URL>
 export const txVersion = TxVersion.LEGACY // or TxVersion.LEGACY
-const cluster = 'devnet' // 'mainnet' | 'devnet'
+const cluster = SOLANA_ENVIRONMENT as "mainnet" | "devnet"
 
 let raydium: Raydium | undefined
 export const initSdk = async (params?: { loadToken?: boolean }) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, Dispatch, SetStateAction } from "react";
 import { ChartingLibraryWidgetOptions, ResolutionString, widget } from "../../../public/static/charting_library";
 import { PublicKey } from '@solana/web3.js';
-import { connection, PROGRAM_ID } from '../../config';
+import { connection } from '../../config';
 import { subscribeToPoolUpdates, unsubscribeFromPool } from '../../utils/pool';
 import { Candle } from '../../types/trading';
 
