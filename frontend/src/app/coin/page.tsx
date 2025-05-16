@@ -1036,7 +1036,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
       const mintA = new PublicKey(tokenMint)
       const mintB = NATIVE_MINT
 
-      const programId = new PublicKey ('LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP') // devnet: DEV_LAUNCHPAD_PROGRAM
+      const programId = new PublicKey (RAYDIUM_LAUNCHPAD_PROGRAM_ID) // devnet: DEV_LAUNCHPAD_PROGRAM
 
       const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey
       const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
@@ -1161,7 +1161,7 @@ const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) =
       const mintA = new PublicKey(tokenMint)
       const mintB = NATIVE_MINT
 
-      const programId = new PublicKey ('LanD8FpTBBvzZFXjTxsAoipkFsxPUCDB4qAqKxYDiNP') // devnet: DEV_LAUNCHPAD_PROGRAM
+      const programId = new PublicKey (RAYDIUM_LAUNCHPAD_PROGRAM_ID) // devnet: DEV_LAUNCHPAD_PROGRAM
 
       const poolId = getPdaLaunchpadPoolId(programId, mintA, mintB).publicKey
       const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId })
