@@ -1,6 +1,6 @@
 import { BN, Idl } from '@coral-xyz/anchor';
 import { CompiledInstruction, Connection, Message, MessageAccountKeys, PublicKey } from '@solana/web3.js';
-import { connection, RAYDIUM_PLATFORM_ID, SOLANA_ENVIRONMENT } from '../config';
+import { connection, connectionMainnet, RAYDIUM_PLATFORM_ID, SOLANA_ENVIRONMENT } from '../config';
 import { BorshEventCoder } from '@coral-xyz/anchor';
 import { IDL as LaunchpadIDL} from '../idl/IDL';
 import { IDL as MainnetLaunchpadIDL } from '../idl/MainnetIDL';
@@ -60,7 +60,7 @@ async function processTransactionForCPIEvent(signature: string) {
   setTimeout(() => processingSignatures.delete(signature), 60000); // 1 minute
 
   try {
-      const txResponse = await connection.getTransaction(signature, {
+      const txResponse = await connectionMainnet.getTransaction(signature, {
           maxSupportedTransactionVersion: 0,
           commitment: "confirmed"
       });
@@ -259,7 +259,7 @@ export async function subscribeToPoolUpdates(
   }) => void
 ): Promise<number> {
 
-  const logsSubscriptionId = connection.onLogs(
+  const logsSubscriptionId = connectionMainnet.onLogs(
     LOG_NOTIFICATION_PROGRAM_ID,
     async (logsResult, context) => {
       if (logsResult.err) {

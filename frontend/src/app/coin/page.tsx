@@ -771,7 +771,7 @@ const TradingPanel = ({ tokenMint, tokenSymbol, isLiquidityActive, setIsLiquidit
           new PublicKey(tokenMint),
           walletProvider.publicKey
         );
-        const tokenBalance = await connection.getTokenAccountBalance(userTokenAccount);
+        const tokenBalance = await connectionMainnet.getTokenAccountBalance(userTokenAccount);
         console.log('Token Balance:', tokenBalance.value.amount);
         setTokenBalance(BigInt(tokenBalance.value.amount));
       } catch (error) {
