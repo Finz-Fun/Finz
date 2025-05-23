@@ -25,7 +25,7 @@ export function AppKitProvider({ children }: { children: React.ReactNode }) {
             adapters: [solanaWeb3JsAdapter],
             networks: [solana],
             metadata: metadata,
-            projectId: '311166b62757b59a280e1ca356635240',
+            projectId: '629e3ef2133d7bc1c3b554f934a5a2c7',
             features: {
                 connectMethodsOrder: ['email', 'social', 'wallet'],
                 analytics: true
