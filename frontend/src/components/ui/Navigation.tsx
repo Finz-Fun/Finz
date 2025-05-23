@@ -12,33 +12,6 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useSearch } from "@/context/SearchContext";
 
-const solanaWeb3JsAdapter = new SolanaAdapter({
-  //@ts-ignore
-  wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()]
-});
-
-// Get projectId from https://cloud.reown.com
-const projectId = "311166b62757b59a280e1ca356635240";
-
-// Metadata object - optional
-const metadata = {
-  name: "finz-test",
-  description: "AppKit Example",
-  url: "https://app.finz.fun", // Must match your domain & subdomain
-  icons: ["https://assets.reown.com/reown-profile-pic.png"]
-};
-
-// Create modal
-createAppKit({
-  adapters: [solanaWeb3JsAdapter],
-  networks: [solana],
-  metadata: metadata,
-  projectId,
-  features: {
-    connectMethodsOrder: ["email", "social", "wallet"],
-    analytics: true // Optional - defaults to Cloud configuration
-  }
-});
 
 const { open } = useAppKit();
 

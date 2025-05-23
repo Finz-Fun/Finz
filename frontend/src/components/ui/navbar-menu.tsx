@@ -6,7 +6,6 @@ import Image from "next/image";
 import {
   AlertDialog,
   AlertDialogAction,
-  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -14,40 +13,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "./alert-dialog";
-import { createAppKit, useAppKit, useAppKitAccount } from '@reown/appkit/react'
-import { SolanaAdapter } from '@reown/appkit-adapter-solana/react'
-import { solana, solanaTestnet, solanaDevnet } from '@reown/appkit/networks'
-import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets'
-import { Toaster } from "@/components/ui/toaster"
+import { useAppKit, useAppKitAccount } from '@reown/appkit/react'
 import { useToast } from "@/hooks/use-toast";
-// 0. Set up Solana Adapter
-const solanaWeb3JsAdapter = new SolanaAdapter({
-  //@ts-ignore
-  wallets: [new PhantomWalletAdapter(), new SolflareWalletAdapter()]
-})
-
-// 1. Get projectId from https://cloud.reown.com
-const projectId = '311166b62757b59a280e1ca356635240'
-
-// 2. Create a metadata object - optional
-const metadata = {
-  name: 'finz-test',
-  description: 'AppKit Example',
-  url: 'https://app.finz.fun', // origin must match your domain & subdomain
-  icons: ['https://assets.reown.com/reown-profile-pic.png']
-}
-
-// 3. Create modal
-createAppKit({
-  adapters: [solanaWeb3JsAdapter],
-  networks: [solana],
-  metadata: metadata,
-  projectId,
-  features: {
-    connectMethodsOrder: ['email', 'social', 'wallet'],
-    analytics: true // Optional - defaults to your Cloud configuration
-  }
-})
 
 const { open } = useAppKit()
 
