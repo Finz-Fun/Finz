@@ -1,18 +1,17 @@
-import { Scraper } from 'agent-twitter-client';
+import { Scraper, SearchMode } from 'agent-twitter-client';
 import { AiService } from './ai-service';
 import { TokenService } from './token-service';
 import { Validation, ValidationError } from '../utils/validation';
 import dotenv from 'dotenv';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import  Creator from '../models/creatorSchema';
+import { Cookie } from 'tough-cookie';
+
 import Mentions from '../models/mentionsSchema';
-// import { RedisService } from './redis-service';
+import { Token } from '../models/tokenSchema';
 
 dotenv.config();
 
-const username = process.env.TWITTER_USERNAME_0;
-const password = process.env.TWITTER_PASSWORD_0;
 
 const SOLANA_ENVIRONMENT = process.env.SOLANA_ENVIRONMENT || 'mainnet-beta';
 
@@ -31,18 +30,21 @@ interface Tweet {
   creator?: string;
   tweetImage?: string;
   avatarUrl?: string;
+  conversationId?: string;
 }
 
 interface TokenCreationState {
   stage: 'name' | 'confirm';
   name?: string;
   symbol?: string;
-  userId: string;  
-  parentTweetId: string; 
+  userId: string;  // User who sent the original mention
+  parentTweetId: string; // ID of the tweet to be tokenized
   suggestions: { name: string; ticker: string }[];
   isInitialReplyDone: boolean;
   isCompleted: boolean;
   createdAt: number;
+  originalMentionId: string; // ID of the mention tweet that initiated this state
+  processedReplies: Set<string>; // IDs of user replies to bot's suggestions already handled for this state
 }
 
 interface TwitterSearchResult {
@@ -75,6 +77,7 @@ export class TwitterService {
   private readonly ERROR_MAX_BACKOFF = 90000;
   private readonly SEARCH_TIMEOUT = 4000; // 4 second timeout
   private readonly TIMESTAMP_FILE = path.join(__dirname, '../../last-processed.txt');
+  private readonly COOKIE_FILE = path.join(__dirname, '../../cookies.json'); // Cookie file path
   private currentCredentialIndex: number = 0;
   private credentials: Array<{ username: string, password: string }>;
   private autoCreateTimeouts: Map<string, NodeJS.Timeout> = new Map();  // Add this to store timeouts
@@ -122,13 +125,12 @@ export class TwitterService {
                     throw new Error('Login unsuccessful');
                 }
                 
-                console.log('Reinitialized and logged in:', isLoggedIn);
-                const cookies = await this.scraper.getCookies();
-                await this.scraper.setCookies(cookies);
+                console.log('Reinitialized and logged in with new credentials:', credentials.username);
+                await this.saveCookies(); // Save cookies for the new successful login
                 
                 const me = await this.scraper.me();
                 if (!me?.userId) {
-                    throw new Error('Failed to get user details');
+                    throw new Error('Failed to get user details after reinitialization login');
                 }
                 
                 this.botUserId = me.userId;
@@ -138,7 +140,7 @@ export class TwitterService {
                 
             } catch (error) {
                 loginAttempts++;
-                console.error(`Login attempt ${loginAttempts} failed:`, error);
+                console.error(`Reinitialization login attempt ${loginAttempts} for ${credentials.username} failed:`, error);
                 
                 if (loginAttempts < maxAttempts) {
                     await new Promise(resolve => setTimeout(resolve, 10000 * loginAttempts));
@@ -146,11 +148,23 @@ export class TwitterService {
             }
         }
         
-        throw new Error(`Failed to login after ${maxAttempts} attempts`);
+        console.error(`Failed to login with ${credentials.username} after ${maxAttempts} attempts during reinitialization.`);
+        // If all attempts for current credentials fail, it will fall through and return false from reinitialize
+        // The main loop will then decide if it needs to try the *next* set of credentials from the list or escalate.
+        throw new Error(`Failed to reinitialize with ${credentials.username} after ${maxAttempts} attempts`);
         
     } catch (error) {
-        console.error('Reinitialization failed:', error);
-        return false;
+        console.error('Reinitialization process failed:', error);
+        // Attempt to clear cookies if reinitialization fails badly, to ensure next cycle tries fresh login
+        try {
+            await fs.unlink(this.COOKIE_FILE);
+            console.log('Cleared cookies due to reinitialization error.');
+        } catch (unlinkError: any) {
+            if (unlinkError.code !== 'ENOENT') {
+                console.error('Error clearing cookies during reinitialization failure:', unlinkError);
+            }
+        }
+        return false; // Reinitialization failed for this credential set
     }
 }
 
@@ -162,7 +176,7 @@ export class TwitterService {
 
       try {
         const tweets: TwitterSearchResult[] = [];
-        const iterator = this.scraper.searchTweets(query, limit);
+        const iterator = this.scraper.searchTweets(query, limit, SearchMode.Latest);
         
         for await (const tweet of iterator) {
           tweets.push(tweet as TwitterSearchResult);
@@ -179,14 +193,36 @@ export class TwitterService {
 
   async initialize() {
     try {
-      // Initialize scraper
-      await this.scraper.login(
-       username as string,
-        password as string
-      );
-      const isLoggedIn = await this.scraper.isLoggedIn();
-      console.log('Is logged in:', isLoggedIn);
+      let loggedIn = false;
+      // Try to load and use saved cookies first
+      if (await this.loadAndSetCookies()) {
+        loggedIn = await this.scraper.isLoggedIn(); // Double check, or rely on check in loadAndSetCookies
+        if(loggedIn){
+            console.log('Successfully initialized with saved cookies.');
+        }
+      }
 
+      if (!loggedIn) {
+        console.log('No valid session from cookies, attempting username/password login.');
+        // Fallback to username/password login if cookies are not available or invalid
+        const currentCredentials = this.credentials[this.currentCredentialIndex];
+        await this.scraper.login(
+          currentCredentials.username,
+          currentCredentials.password
+        );
+        loggedIn = await this.scraper.isLoggedIn();
+        if (loggedIn) {
+          console.log('Login successful with username/password.');
+          await this.saveCookies(); // Save cookies after successful login
+        } else {
+          console.error('Login failed with primary credentials.');
+          // Optionally, trigger reinitialize here or throw to indicate critical failure
+          // For now, we'll let it potentially fail and be caught by the main catch block
+          throw new Error('Primary login failed during initialization');
+        }
+      }
+
+      // Timestamp loading logic (remains the same)
       try {
         const savedTimestamp = await fs.readFile(this.TIMESTAMP_FILE, 'utf-8');
         console.log('Read from file:', savedTimestamp);
@@ -208,17 +244,33 @@ export class TwitterService {
         await this.updateLastProcessedTimestamp(this.lastProcessedTimestamp);
       }
 
-      const cookies = await this.scraper.getCookies();
-
-      await this.scraper.setCookies(cookies);
-
+      // Scraper state setup (me, botUserId, etc.)
       const me = await this.scraper.me();
-      this.botUserId = me?.userId;
-      this.botScreenName = me?.username as string;
-      console.log('Bot initialized as:', me);
+      if (!me?.userId) {
+          // If 'me' failed even after successful login/cookie set, something is wrong
+          console.error('Failed to get user details (me) even after login/cookie setup.');
+          // This might indicate that the cookies didn't establish a full session, or login was partial.
+          // Attempting a full re-login might be an option here, or re-initialize.
+          // For now, let's throw to indicate a problem with session validation post-login.
+          await this.scraper.logout(); // Clear potentially bad cookies/session
+          await fs.unlink(this.COOKIE_FILE).catch(() => {}); // Delete bad cookie file
+          throw new Error('Session validation failed: Could not retrieve user details after login/cookie setup.');
+      }
+      this.botUserId = me.userId;
+      this.botScreenName = me.username as string;
+      console.log('Bot initialized as:', me.username);
       return true;
     } catch (error) {
       console.error('Twitter initialization failed:', error);
+      // If initialization fails, try to clear cookies to force fresh login next time
+      try {
+        await fs.unlink(this.COOKIE_FILE);
+        console.log('Cleared cookies due to initialization error.');
+      } catch (unlinkError: any) {
+        if (unlinkError.code !== 'ENOENT') {
+            console.error('Error clearing cookies during initialization failure:', unlinkError);
+        }
+      }
       return false;
     }
   }
@@ -247,22 +299,25 @@ export class TwitterService {
 
         console.log('Searching for new mentions...', this.botScreenName);
         
-        const query = `(@TweetToToken) -filter:replies -filter:retweets`;
+        const query = `(@testfinz29275) -filter:retweets`;
         const mentions = await Mentions.find({});
         
         try {
           const notifications = await this.searchTweetsWithTimeout(query, 50);
           const newMentions = notifications.filter(tweet => !mentions.some(m => m.tweetId === tweet.id));
           await Mentions.insertMany(newMentions.map(tweet => ({ tweetId: tweet.id })));
-          const enabledCreators = await Creator.find({ agentEnabled: true });
+          // const enabledCreators = await Creator.find({ agentEnabled: true });
 
-          const enabledCreatorIds = new Set(enabledCreators.map(c => c.twitterId));
+          // const enabledCreatorIds = new Set(enabledCreators.map(c => c.twitterId));
 
           for await (const tweet of notifications) {
-            if (!enabledCreatorIds.has(tweet.userId)) {
-              console.log('Skipping tweet from non-enabled creator:', tweet.userId);
-              continue;
+            // === Prevent bot from processing its own tweets as new mentions ===
+            if (tweet.userId === this.botUserId || 
+                this.credentials.some(cred => tweet.username?.toLowerCase() === cred.username.toLowerCase())) {
+                console.log(`Skipping own tweet ${tweet.id} from user ${tweet.username} as a potential new mention.`);
+                continue; 
             }
+            // === End of bot self-tweet check ===
 
             const tweetTimestamp = (tweet.timestamp as number) * 1000;
 
@@ -274,11 +329,15 @@ export class TwitterService {
             }
 
             if (!this.processedMentions.has(tweet.id as string)) {
-              console.log('Starting new conversation:', tweet);
+              console.log('Starting new conversation with tweet:', tweet.id, 'from user:', tweet.username);
               await this.handleMention({
                 id: tweet.id as string,
                 userId: tweet.userId as string,
-                text: tweet.text as string
+                text: tweet.text as string,
+                parentTweetId: tweet.inReplyToStatusId,
+                timestamp: (tweet.timestamp as number * 1000).toString(),
+                tweetUsername: tweet.username,
+                tweetName: tweet.name
               });
               this.processedMentions.add(tweet.id as string);
               await this.updateLastProcessedTimestamp(
@@ -287,47 +346,47 @@ export class TwitterService {
             }
           }
 
-          for (const [tweetId, state] of this.tweetStates.entries()) {
-            if (!state.isCompleted) {
-              console.log('Checking replies for tweet:', tweetId);
-              const repliesQuery = `conversation_id:${tweetId}`;
-              const replies = await this.searchTweetsWithTimeout(repliesQuery, 50);
+          for (const [originalMentionId, state] of this.tweetStates.entries()) {
+            if (!state.isCompleted && state.stage === 'name') {
+              console.log('Checking replies for conversation initiated by mention:', originalMentionId);
+              const repliesInConversation = await this.searchTweetsWithTimeout(`conversation_id:${originalMentionId}`, 50);
               
-              for await (const reply of replies) {
+              for await (const reply of repliesInConversation) {
                 if (this.credentials.some(cred => reply.username?.toLowerCase() === cred.username.toLowerCase())) continue;
 
-                const parentTweetId = reply.inReplyToStatusId;
-                
-                if (parentTweetId) {
-                  const parentTweet = await this.scraper.getTweet(parentTweetId);
-                  if (!this.credentials.some(cred => parentTweet?.username?.toLowerCase() === cred.username.toLowerCase())) {
-                    console.log('Skipping reply as parent tweet is not from bot');
-                    continue;
-                  }
-                }
+                if (reply.userId === state.userId &&
+                    !state.processedReplies.has(reply.id as string) &&
+                    reply.inReplyToStatusId) {
+                    
+                    const botsSuggestionTweetCandidate = await this.scraper.getTweet(reply.inReplyToStatusId);
+                    
+                    if (botsSuggestionTweetCandidate &&
+                        botsSuggestionTweetCandidate.userId === this.botUserId && 
+                        botsSuggestionTweetCandidate.inReplyToStatusId === originalMentionId) {
+                        
+                        console.log(`Processing user reply ${reply.id} to bot's suggestion for original mention ${originalMentionId}`);
+                        
+                        const userReplyTweet: Tweet = {
+                            id: reply.id as string,
+                            userId: reply.userId as string,
+                            text: reply.text as string,
+                            parentTweetId: reply.inReplyToStatusId,
+                            timestamp: reply.timestamp ? (reply.timestamp * 1000).toString() : undefined,
+                            tweetUsername: reply.username,
+                            tweetName: reply.name,
+                            conversationId: reply.conversationId,
+                            replies: reply.replies,
+                            retweets: reply.retweets,
+                            likes: reply.likes,
+                        };
 
-                const originalTweet = await this.scraper.getTweet(reply.conversationId as string);
-                const profile = await this.scraper.getProfile(originalTweet?.username as string);
-                const avatarUrl = profile?.avatar;
-                
-                if (reply.userId === state.userId) {
-                  console.log('Processing reply:', reply);
-                  await this.continueTokenCreation({
-                    id: reply.id as string,
-                    userId: reply.userId as string,
-                    text: reply.text as string,
-                    tweetUsername: originalTweet?.username as string,
-                    tweetName: originalTweet?.name as string,
-                    tweetContent: originalTweet?.text as string,
-                    tweetImage: originalTweet?.photos[0]?.url as string,
-                    timestamp: originalTweet?.timestamp?.toString() as string,
-                    parentTweetId: originalTweet?.conversationId as string,
-                    replies: originalTweet?.replies as number || 0,
-                    retweets: originalTweet?.retweets as number || 0,
-                    likes: originalTweet?.likes as number || 0,
-                    creator: originalTweet?.userId as string,
-                    avatarUrl: avatarUrl
-                  }, state);
+                        await this.continueTokenCreation(userReplyTweet, state, originalMentionId);
+                        state.processedReplies.add(reply.id as string);
+
+                        if (state.isCompleted) {
+                            break;
+                        }
+                    }
                 }
               }
             }
@@ -376,195 +435,362 @@ export class TwitterService {
         this.autoCreateTimeouts.delete(tweet.id);
       }
 
-      const suggestions = await this.aiService.generateSuggestions(tweet.text);
-      console.log('suggestions', suggestions);
-      // const suggestions = [
-      //   {
-      //     name: '1. SolanaSavvy',
-      //     ticker: 'SLSY',
-      //     description: 'Ride the Solana wave in 2025!'
-      //   },
-      //   {
-      //     name: '2. LockIn2025',
-      //     ticker: 'LCKN',
-      //     description: "Secure your future, don't miss out!"
-      //   },
-      //   {
-      //     name: '3. FutureFlare',
-      //     ticker: 'FUTR',
-      //     description: 'Ignite your portfolio with Solana!'
-      //   }
-      // ]
-      const contextIntro = "Based on your tweet, here are some token suggestions:";
+      const directTokenizationPattern = /@testfinz29275\s+(.+?)\s+\(([^)]+)\)/i;
+      const mentionText = tweet.text;
+      const match = mentionText.match(directTokenizationPattern);
 
-      await this.replyToTweet(tweet.id, 
-        `${contextIntro}\n\n` +
-        suggestions.map((s, i) => `\n${i+1}. ${s.name} (${s.ticker})\n`).join('\n') +
-        `Reply with a number, OR create a custom one in the format:\n\n` +
-        `Name (TICKER)`
-      );
-      
-      this.tweetStates.set(tweet.id, {
-        stage: 'name',
-        userId: tweet.userId,
-        parentTweetId: tweet.id,
-        suggestions,
-        isInitialReplyDone: true,
-        isCompleted: false,
-        createdAt: Date.now()
-      });
+      if (match) {
+        const tokenName = match[1].trim();
+        const tokenSymbol = match[2].trim();
+        console.log(`Direct tokenization attempt: Name='${tokenName}', Symbol='${tokenSymbol}' from mention tweet ${tweet.id}`);
 
-      const timeout = setTimeout(async () => {
-        const state = this.tweetStates.get(tweet.id);
-        if (state && !state.isCompleted && state.stage === 'name') {
-          try {
-            console.log('Auto-creating token for tweet:', tweet.id);
-            const autoChoice = state.suggestions[0];
-
-            const originalTweet = await this.scraper.getTweet(tweet.id);
-            if (!originalTweet) {
-              throw new Error('Could not fetch original tweet');
-            }
-            const profile = await this.scraper.getProfile(originalTweet.username as string);
-            const avatarUrl = profile?.avatar;
-
-            const result = await this.tokenService.createToken({
-              name: originalTweet.name as string,
-              tweetId: originalTweet.conversationId as string,
-              tokenName: autoChoice.name.replace(/^\d+\.\s*/, ''),
-              symbol: autoChoice.ticker,
-              username: originalTweet.username as string,
-              content: originalTweet.text as string,
-              timestamp: originalTweet.timestamp?.toString() as string,
-              replies: originalTweet.replies as number || 0,
-              retweets: originalTweet.retweets as number || 0,
-              likes: originalTweet.likes as number || 0,
-              creator: originalTweet.userId as string,
-              tweetImage: originalTweet.photos?.[0]?.url as string,
-              avatarUrl: avatarUrl as string
-            });
-
-            if (result.success) {
-              // await this.replyToTweet(tweet.id,
-              //   `⏰ Auto-created your token ${autoChoice.name} (${autoChoice.ticker})!\n\n` +
-              //   `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-              //   `Start trading now! 🚀`);
-
-              await this.replyToTweet(tweet.id,
-                `${autoChoice.name} (${autoChoice.ticker}) has been ⏰ Auto-created!\n\n` +
-                `CA: ${result.tokenMint}\n\n` +
-                `Trade ${autoChoice.ticker} here:\n` +
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
-              
-              await this.replyToTweet(tweet.parentTweetId as string,
-                `Token: ${autoChoice.name} (${autoChoice.ticker})\n\n` +
-                `CA: ${result.tokenMint}\n\n` +
-                `Trade ${autoChoice.ticker} here:\n` +
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
-              
-              state.isCompleted = true;
-              this.tweetStates.delete(state.parentTweetId);
-            }
-          } catch (error) {
-            console.error('Auto-creation error:', error);
-            await this.replyToTweet(tweet.id,
-              `Sorry, there was an error auto-creating your token. Please try selecting manually.`);
-          } finally {
-            this.autoCreateTimeouts.delete(tweet.id);
-          }
+        let targetTweetToTokenizeId: string;
+        if (tweet.parentTweetId) {
+          targetTweetToTokenizeId = tweet.parentTweetId;
+          console.log(`Mention is a reply. Tokenizing parent tweet: ${targetTweetToTokenizeId}`);
+        } else {
+          targetTweetToTokenizeId = tweet.id;
+          console.log(`Mention is a direct tweet. Tokenizing this tweet: ${targetTweetToTokenizeId}`);
         }
-      }, 15 * 60 * 1000);
 
-      this.autoCreateTimeouts.set(tweet.id, timeout);
-      
+        // === Check if already tokenized (Direct Path) ===
+        const existingTokenDirect = await Token.findOne({ tweetId: targetTweetToTokenizeId });
+        if (existingTokenDirect) {
+          console.log(`Tweet ${targetTweetToTokenizeId} already tokenized as ${existingTokenDirect.name} (${existingTokenDirect.symbol}). Mint: ${existingTokenDirect.mintAddress}`);
+          await this.replyToTweet(tweet.id, 
+            `This tweet (ID: ${targetTweetToTokenizeId}) has already been tokenized as ${existingTokenDirect.name} (${existingTokenDirect.symbol}).\n\n` +
+            `CA: ${existingTokenDirect.mintAddress}\n\n` +
+            `Trade ${existingTokenDirect.symbol} here:\n` +
+            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenDirect.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+            `https://finz.fun/coin?tokenMint=${existingTokenDirect.mintAddress}&action=BUY`);
+          return;
+        }
+        // === End Check ===
+
+        const tweetToTokenizeDetails = await this.scraper.getTweet(targetTweetToTokenizeId);
+        if (!tweetToTokenizeDetails) {
+          await this.replyToTweet(tweet.id, `Sorry, I couldn't find the tweet you want to tokenize (ID: ${targetTweetToTokenizeId}).`);
+          console.error(`Could not fetch tweet to tokenize: ${targetTweetToTokenizeId}`);
+          return;
+        }
+
+        const profile = await this.scraper.getProfile(tweetToTokenizeDetails.username as string);
+        const avatarUrl = profile?.avatar;
+
+        console.log('Creating token directly for:', tokenName, tokenSymbol);
+        const result = await this.tokenService.createToken({
+          name: tweetToTokenizeDetails.name as string,
+          tweetId: tweetToTokenizeDetails.id as string,
+          tokenName: tokenName,
+          symbol: tokenSymbol,
+          username: tweetToTokenizeDetails.username as string,
+          content: tweetToTokenizeDetails.text as string,
+          timestamp: tweetToTokenizeDetails.timestamp?.toString() as string,
+          replies: Number(tweetToTokenizeDetails.replies) || 0,       // Ensure number
+          retweets: Number(tweetToTokenizeDetails.retweets) || 0,     // Ensure number
+          likes: Number(tweetToTokenizeDetails.likes) || 0,           // Ensure number
+          creator: tweetToTokenizeDetails.userId as string,
+          tweetImage: tweetToTokenizeDetails.photos?.[0]?.url as string,
+          avatarUrl: avatarUrl as string
+        });
+
+        if (result.success) {
+          const successMessageBase =
+            `${tokenName} (${tokenSymbol}) has been created for the tweet!\n\n` +
+            `CA: ${result.tokenMint}\n\n` +
+            `Trade ${tokenSymbol} here:\n` +
+            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+            `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`;
+          
+          await this.replyToTweet(tweet.id, successMessageBase);
+
+          if (targetTweetToTokenizeId !== tweet.id) {
+            await this.replyToTweet(targetTweetToTokenizeId,
+              `Your tweet has been tokenized as ${tokenName} (${tokenSymbol}) by @${tweet.tweetUsername}!\n\n` +
+              `CA: ${result.tokenMint}\n\n` +
+              `Trade ${tokenSymbol} here:\n` +
+              `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+              `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`
+            );
+          }
+        } else {
+          await this.replyToTweet(tweet.id, `Sorry, there was an error creating your token ${tokenName} (${tokenSymbol}). Please try again.`);
+        }
+        return;
+
+      } else {
+        console.log(`Starting normal suggestion flow for mention tweet ${tweet.id}`);
+        
+        let tweetForAISuggestionsId: string;
+        let tweetForAISuggestionsText: string;
+        let authorOfTweetForAISuggestions: string | undefined;
+
+        if (tweet.parentTweetId) {
+          tweetForAISuggestionsId = tweet.parentTweetId;
+          const parentTweetDetails = await this.scraper.getTweet(tweetForAISuggestionsId);
+          if (!parentTweetDetails) {
+            await this.replyToTweet(tweet.id, "Sorry, I couldn't fetch the tweet you replied to for suggestions.");
+            console.error(`Could not fetch parent tweet for AI suggestions: ${tweetForAISuggestionsId}`);
+            return;
+          }
+          tweetForAISuggestionsText = parentTweetDetails.text as string;
+          authorOfTweetForAISuggestions = parentTweetDetails.username as string;
+        } else {
+          tweetForAISuggestionsId = tweet.id;
+          tweetForAISuggestionsText = tweet.text;
+          authorOfTweetForAISuggestions = tweet.tweetUsername;
+        }
+        
+        // === Check if already tokenized (Suggestion Path) ===
+        const existingTokenSuggestions = await Token.findOne({ tweetId: tweetForAISuggestionsId });
+        if (existingTokenSuggestions) {
+          console.log(`Tweet ${tweetForAISuggestionsId} (target for suggestions) already tokenized as ${existingTokenSuggestions.name} (${existingTokenSuggestions.symbol}). Mint: ${existingTokenSuggestions.mintAddress}`);
+          await this.replyToTweet(tweet.id, // Reply to the mention tweet that tried to start the flow
+            `The tweet you're referring to (ID: ${tweetForAISuggestionsId}) has already been tokenized as ${existingTokenSuggestions.name} (${existingTokenSuggestions.symbol}).\n\n` +
+            `CA: ${existingTokenSuggestions.mintAddress}\n\n` +
+            `Trade ${existingTokenSuggestions.symbol} here:\n` +
+            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenSuggestions.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+            `https://finz.fun/coin?tokenMint=${existingTokenSuggestions.mintAddress}&action=BUY`);
+          return; // Do not proceed with suggestion flow if target is already tokenized
+        }
+        // === End Check ===
+
+        const suggestions = await this.aiService.generateSuggestions(tweetForAISuggestionsText);
+        console.log('Suggestions for tweet by', authorOfTweetForAISuggestions, ':', suggestions);
+        
+        const contextIntro = `Based on the tweet by @${authorOfTweetForAISuggestions || 'the user'}, here are some token suggestions:`;
+
+        await this.replyToTweet(tweet.id,
+          `${contextIntro}\n\n` +
+          suggestions.map((s, i) => `\n${i + 1}. ${s.name} (${s.ticker})\n`).join('\n') +
+          `Reply with a number, OR create a custom one in the format:\n\n` +
+          `Name (TICKER)`
+        );
+        
+        this.tweetStates.set(tweet.id, {
+          stage: 'name',
+          userId: tweet.userId,
+          parentTweetId: tweetForAISuggestionsId,
+          suggestions,
+          isInitialReplyDone: true,
+          isCompleted: false,
+          createdAt: Date.now(),
+          originalMentionId: tweet.id,
+          processedReplies: new Set<string>()
+        });
+
+        const timeout = setTimeout(async () => {
+          const state = this.tweetStates.get(tweet.id);
+          if (state && !state.isCompleted && state.stage === 'name') {
+            try {
+              // === Check if already tokenized (Auto-Creation Path) ===
+              const existingTokenAuto = await Token.findOne({ tweetId: state.parentTweetId });
+              if (existingTokenAuto) {
+                console.log(`Tweet ${state.parentTweetId} (target for auto-creation) already tokenized as ${existingTokenAuto.name} (${existingTokenAuto.symbol}). Mint: ${existingTokenAuto.mintAddress}`);
+                // Don't reply here as it's an auto-process, just prevent re-tokenization.
+                // Clear timeout and state if necessary.
+                this.autoCreateTimeouts.delete(tweet.id); // tweet.id is originalMentionId
+                // state.isCompleted = true; // Mark as completed to prevent further processing, though it will be deleted.
+                this.tweetStates.delete(tweet.id); // Delete the state
+                return;
+              }
+              // === End Check ===
+
+              console.log('Auto-creating token for mention tweet:', tweet.id, 'based on target tweet:', state.parentTweetId);
+              const autoChoice = state.suggestions[0];
+
+              const originalTweetToTokenize = await this.scraper.getTweet(state.parentTweetId);
+              if (!originalTweetToTokenize) {
+                throw new Error(`Could not fetch original tweet to tokenize for auto-creation: ${state.parentTweetId}`);
+              }
+
+              const profileAuto = await this.scraper.getProfile(originalTweetToTokenize.username as string); 
+              const avatarUrlAuto = profileAuto?.avatar;
+
+              console.log('Tweet to be tokenized details (auto):', originalTweetToTokenize);
+              
+              try {
+                const result = await this.tokenService.createToken({
+                  name: originalTweetToTokenize.name as string,
+                  tweetId: originalTweetToTokenize.id as string,
+                  tokenName: autoChoice.name.replace(/^\d+\.\s*/, ''),
+                  symbol: autoChoice.ticker,
+                  username: originalTweetToTokenize.username as string,
+                  content: originalTweetToTokenize.text as string,
+                  timestamp: originalTweetToTokenize.timestamp?.toString() as string,
+                  replies: Number(originalTweetToTokenize.replies) || 0,      // Ensure number
+                  retweets: Number(originalTweetToTokenize.retweets) || 0,    // Ensure number
+                  likes: Number(originalTweetToTokenize.likes) || 0,          // Ensure number
+                  creator: originalTweetToTokenize.userId as string,
+                  tweetImage: originalTweetToTokenize.photos?.[0]?.url as string,
+                  avatarUrl: avatarUrlAuto as string // Use renamed var
+                });
+
+                console.log('Token creation result:', result);
+
+                if (result.success) {
+                  const autoCreateMessageBase =
+                    `${autoChoice.name} (${autoChoice.ticker}) has been ⏰ Auto-created!\n\n` +
+                    `CA: ${result.tokenMint}\n\n` +
+                    `Trade ${autoChoice.ticker} here:\n` +
+                    `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                    `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`;
+                  
+                  await this.replyToTweet(tweet.id, autoCreateMessageBase);
+                  
+                  if (state.parentTweetId !== tweet.id) {
+                    await this.replyToTweet(state.parentTweetId,
+                      `Your tweet has been tokenized as ${autoChoice.name} (${autoChoice.ticker}) (auto-created based on a mention by @${tweet.tweetUsername})!\n\n` +
+                      `CA: ${result.tokenMint}\n\n` +
+                      `Trade ${autoChoice.ticker} here:\n` +
+                      `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                      `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`
+                    );
+                  }
+                  
+                  state.isCompleted = true;
+                  this.tweetStates.delete(tweet.id);
+                }
+              } catch (error) {
+                console.error('Auto-creation error:', error);
+                await this.replyToTweet(tweet.id,
+                  `Sorry, there was an error auto-creating your token. Please try selecting manually.`);
+              } finally {
+                this.autoCreateTimeouts.delete(tweet.id);
+              }
+            } catch (error) {
+              console.error('Error in auto-creation timeout:', error);
+              await this.replyToTweet(tweet.id,
+                `Sorry, there was an error auto-creating your token. Please try selecting manually.`);
+            }
+          }
+        }, 15 * 60 * 1000);
+        this.autoCreateTimeouts.set(tweet.id, timeout);
+      }
     } catch (error) {
-      console.error('Error generating suggestions:', error);
+      console.error('Error in handleMention:', error);
       await this.replyToTweet(tweet.id, 
-        `Sorry, I couldn't generate suggestions right now. Please try again later.`);
+          `Sorry, an unexpected error occurred while processing your request. Please try again later.`);
     }
   }
 
-  // private async getParentTweetId(tweetId: string): Promise<string | null> {
-  //   try {
-  //     const tweet = await this.scraper.getTweet(tweetId);
-  //     return tweet && tweet.inReplyToStatusId ? tweet.inReplyToStatusId : null;
-  //   } catch (error) {
-  //     console.error('Error getting parent tweet:', error);
-  //     return null;
-  //   }
-  // }
-
-  private async continueTokenCreation(tweet: Tweet, state: TokenCreationState) {
-    console.log('Processing tweet:', tweet.id, 'Stage:', state.stage, 'Text:', tweet.text);
-    const text = tweet.text.replace(/@\w+/g, '').trim();
+  private async continueTokenCreation(userReplyTweet: Tweet, state: TokenCreationState, originalMentionIdKey: string) {
+    console.log('Processing user reply:', userReplyTweet.id, 'Stage:', state.stage, 'Text:', userReplyTweet.text);
+    console.log('Current state for this conversation (initiated by mention', originalMentionIdKey, '):', state);
+    
+    const text = userReplyTweet.text.replace(/@\w+/g, '').trim();
 
     try {
+        if (state.isCompleted) {
+            console.log(`Attempt to continue token creation for ${originalMentionIdKey}, but state is already completed.`);
+            await this.replyToTweet(userReplyTweet.id, "It looks like this token creation process was already completed (perhaps automatically). Please check.");
+            return; 
+        }
+
+        // === Check if already tokenized (Continue Creation Path) ===
+        // state.parentTweetId is the ID of the tweet to be tokenized
+        const existingTokenContinue = await Token.findOne({ tweetId: state.parentTweetId });
+        if (existingTokenContinue) {
+            console.log(`Tweet ${state.parentTweetId} (target for continue token creation) already tokenized as ${existingTokenContinue.name} (${existingTokenContinue.symbol}). Mint: ${existingTokenContinue.mintAddress}`);
+            await this.replyToTweet(userReplyTweet.id, // Reply to the user trying to continue
+                `The tweet (ID: ${state.parentTweetId}) has already been tokenized as ${existingTokenContinue.name} (${existingTokenContinue.symbol}).\n\n` +
+                `CA: ${existingTokenContinue.mintAddress}\n\n` +
+                `Trade ${existingTokenContinue.symbol} here:\n` +
+                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenContinue.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                `https://finz.fun/coin?tokenMint=${existingTokenContinue.mintAddress}&action=BUY`);
+            
+            // Clean up state as this flow is now redundant
+            state.isCompleted = true;
+            this.tweetStates.delete(originalMentionIdKey);
+            const timeout = this.autoCreateTimeouts.get(originalMentionIdKey);
+            if (timeout) {
+                clearTimeout(timeout);
+                this.autoCreateTimeouts.delete(originalMentionIdKey);
+            }
+            return;
+        }
+        // === End Check ===
+
         switch (state.stage) {
             case 'name':
                 const choice = Validation.parseUserChoice(text, state.suggestions);
-                console.log('Starting token creation for:', choice.name, choice.ticker);
-                console.log('Tweet for creation:', tweet);
+                console.log('User choice for token creation:', choice.name, choice.ticker);
+                
+                const tweetToTokenizeDetailsContinue = await this.scraper.getTweet(state.parentTweetId); 
+                if (!tweetToTokenizeDetailsContinue) {
+                    console.error(`Could not fetch tweet to tokenize ${state.parentTweetId} during continueTokenCreation.`);
+                    await this.replyToTweet(userReplyTweet.id, "Sorry, I couldn't find the original tweet to tokenize. Please try starting the process again.");
+                    return;
+                }
+
+                const profileContinue = await this.scraper.getProfile(tweetToTokenizeDetailsContinue.username as string); 
+                const avatarUrlContinue = profileContinue?.avatar;
+                console.log('Tweet to be tokenized details (continue):', tweetToTokenizeDetailsContinue);
 
                 try {
                     const result = await this.tokenService.createToken({
-                        name: tweet.tweetName as string,
-                        tweetId: tweet.parentTweetId as string,
+                        name: tweetToTokenizeDetailsContinue.name as string,
+                        tweetId: tweetToTokenizeDetailsContinue.id as string,
                         tokenName: choice.name.replace(/^\d+\.\s*/, ''),
                         symbol: choice.ticker,
-                        username: tweet.tweetUsername as string,
-                        content: tweet.tweetContent as string,
-                        timestamp: tweet.timestamp as string,
-                        replies: tweet.replies as number,
-                        retweets: tweet.retweets as number,
-                        likes: tweet.likes as number,
-                        creator: tweet.userId,
-                        tweetImage: tweet.tweetImage as string,
-                        avatarUrl: tweet.avatarUrl as string
+                        username: tweetToTokenizeDetailsContinue.username as string,
+                        content: tweetToTokenizeDetailsContinue.text as string,
+                        timestamp: tweetToTokenizeDetailsContinue.timestamp?.toString() as string,
+                        replies: Number(tweetToTokenizeDetailsContinue.replies) || 0,       // Ensure number
+                        retweets: Number(tweetToTokenizeDetailsContinue.retweets) || 0,     // Ensure number
+                        likes: Number(tweetToTokenizeDetailsContinue.likes) || 0,           // Ensure number
+                        creator: tweetToTokenizeDetailsContinue.userId as string,
+                        tweetImage: tweetToTokenizeDetailsContinue.photos?.[0]?.url as string,
+                        avatarUrl: avatarUrlContinue as string
                     });
 
                     console.log('Token creation result:', result);
 
                     if (result.success) {
-                        const timeout = this.autoCreateTimeouts.get(state.parentTweetId);
+                        const timeout = this.autoCreateTimeouts.get(originalMentionIdKey);
                         if (timeout) {
                           clearTimeout(timeout);
-                          this.autoCreateTimeouts.delete(state.parentTweetId);
+                          this.autoCreateTimeouts.delete(originalMentionIdKey);
                         }
                         
-                        await this.replyToTweet(tweet.id,
-                          `${choice.name} (${choice.ticker}) has been created!\n\n` +
-                `CA: ${result.tokenMint}\n\n` +
-                `Trade ${choice.ticker} here:\n` +
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
+                        const successMessageBase =
+                            `${choice.name} (${choice.ticker}) has been created!\n\n` +
+                            `CA: ${result.tokenMint}\n\n` +
+                            `Trade ${choice.ticker} here:\n` +
+                            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                            `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`;
                         
-                        await this.replyToTweet(tweet.parentTweetId as string,
-                            `Token: ${choice.name} (${choice.ticker})\n\n` +
-                `CA: ${result.tokenMint}\n\n` +
-                `Trade ${choice.ticker} here:\n` +
-                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
+                        await this.replyToTweet(userReplyTweet.id, successMessageBase);
+                        
+                        if (state.parentTweetId !== userReplyTweet.parentTweetId && state.parentTweetId !== userReplyTweet.id) {
+                             await this.replyToTweet(state.parentTweetId, 
+                                `This tweet has been tokenized as ${choice.name} (${choice.ticker}) through a conversation with @${userReplyTweet.tweetUsername}!\n\n`+
+                                `CA: ${result.tokenMint}\n\n` +
+                                `Trade ${choice.ticker} here:\n` +
+                                `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${result.tokenMint}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+                                `https://finz.fun/coin?tokenMint=${result.tokenMint}&action=BUY`);
+                        }
                         
                         state.isCompleted = true;
-                        this.tweetStates.delete(state.parentTweetId);
+                        this.tweetStates.delete(originalMentionIdKey);
                     } else {
-                        throw new Error('Token creation failed');
+                        await this.replyToTweet(userReplyTweet.id, `Sorry, token creation for ${choice.name} (${choice.ticker}) failed. Error: ${result.error || 'Unknown error'}`);
                     }
-                } catch (error) {
-                    console.error('Token creation error details:', error);
-                    throw error;
+                } catch (tokenCreationError: any) { 
+                    console.error('Error during tokenService.createToken call:', tokenCreationError);
+                    const errorMessage = tokenCreationError.message || `an unexpected error occurred creating ${choice.name} (${choice.ticker})`;
+                    await this.replyToTweet(userReplyTweet.id, `Sorry, there was an error creating your token: ${errorMessage}. Please try again.`);
                 }
                 break;
+            // case 'confirm': ... (if there were other stages)
         }
     } catch (error) {
-        console.error('Error in continueTokenCreation:', error, 'State:', state);
+        console.error('Error in continueTokenCreation (outer try-catch for switch statement):', error, 'State:', state);
         if (error instanceof ValidationError) {
-            await this.replyToTweet(tweet.id, error.message);
+            await this.replyToTweet(userReplyTweet.id, error.message);
         } else {
             console.error('Error in token creation:', error);
-            await this.replyToTweet(tweet.id,
+            await this.replyToTweet(userReplyTweet.id,
                 `Sorry, there was an error creating your token. Please try again.`);
         }
     }
@@ -588,5 +814,76 @@ export class TwitterService {
       this.autoCreateTimeouts.delete(tweetId);
     }
     console.log('Stopped listening for mentions');
+  }
+
+  private async saveCookies() {
+    try {
+      const cookiesToSave = await this.scraper.getCookies();
+      console.log('Format from getCookies() before stringify:', JSON.stringify(cookiesToSave, null, 2)); // Log the structure
+      await fs.writeFile(this.COOKIE_FILE, JSON.stringify(cookiesToSave, null, 2));
+      console.log('Cookies saved successfully to:', this.COOKIE_FILE);
+    } catch (error: any) {
+      console.error('Error saving cookies:', error);
+    }
+  }
+
+  private async loadAndSetCookies(): Promise<boolean> {
+    try {
+      const cookiesString = await fs.readFile(this.COOKIE_FILE, 'utf-8');
+      const loadedPlainObjects = JSON.parse(cookiesString); 
+      // console.log('Loaded plain objects:', loadedPlainObjects);
+
+      if (loadedPlainObjects && Array.isArray(loadedPlainObjects) && loadedPlainObjects.length > 0) {
+        console.log(`Attempting to reconstruct and set ${loadedPlainObjects.length} cookies.`);
+        const cookiesToSet: Cookie[] = []; // Initialize an array to hold reconstructed cookies
+        
+        for (const plainCookieObj of loadedPlainObjects) {
+          const cookieProperties: any = {
+            key: plainCookieObj.key,
+            value: plainCookieObj.value,
+            domain: plainCookieObj.domain,
+            path: plainCookieObj.path,
+            secure: plainCookieObj.secure === undefined ? false : plainCookieObj.secure, // default to false if undefined
+            httpOnly: plainCookieObj.httpOnly === undefined ? false : plainCookieObj.httpOnly, // default to false if undefined
+          };
+
+          if (plainCookieObj.expires && plainCookieObj.expires !== 'Infinity') { // tough-cookie uses 'Infinity' for session cookies if expires is not set
+            cookieProperties.expires = new Date(plainCookieObj.expires);
+          }
+          // sameSite is a bit tricky with tough-cookie's Cookie constructor, often it's better to let it default or be set by the server string if possible
+          // If 'sameSite' is crucial and causing issues, it might need to be part of the cookie string itself if `setCookie` takes a string.
+          // For now, we'll rely on the main properties.
+          // Creation and lastAccessed are usually managed by the cookie jar itself upon setting.
+
+          // Filter out any explicitly undefined values that tough-cookie might not like
+          // Object.keys(cookieProperties).forEach(k => cookieProperties[k] === undefined && delete cookieProperties[k]);
+          // The defaults for secure and httpOnly handle undefined already.
+
+          const cookie = new Cookie(cookieProperties);
+          cookiesToSet.push(cookie); // Add the reconstructed cookie to the array
+        }
+        
+        if (cookiesToSet.length > 0) {
+          await this.scraper.setCookies(cookiesToSet); // Call setCookies with the array of cookies
+          console.log('All cookies from file reconstructed and processed for setting.');
+        }
+        
+        console.log('Cookies loaded and set successfully from:', this.COOKIE_FILE);
+        const isLoggedInWithCookies = await this.scraper.isLoggedIn();
+        if (isLoggedInWithCookies) {
+          console.log('Session is active with loaded cookies.');
+          return true;
+        }
+        console.log('Session is not active with loaded cookies. Proceeding to login.');
+        return false;
+      }
+    } catch (error: any) { 
+      if (error.code !== 'ENOENT') {
+        console.error('Error loading or setting cookies:', error);
+      } else {
+        console.log('Cookie file not found. Proceeding to login.');
+      }
+    }
+    return false;
   }
 }
