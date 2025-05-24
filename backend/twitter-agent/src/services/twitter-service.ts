@@ -44,6 +44,7 @@ interface TokenCreationState {
   isCompleted: boolean;
   createdAt: number;
   originalMentionId: string; // ID of the mention tweet that initiated this state
+  originalMentionConversationId?: string;
   processedReplies: Set<string>; // IDs of user replies to bot's suggestions already handled for this state
 }
 
@@ -71,8 +72,8 @@ export class TwitterService {
   private lastProcessedTimestamp: number;
   private aiService: AiService;
   private tokenService: TokenService;
-  private readonly MIN_BACKOFF = 100000;  
-  private readonly MAX_BACKOFF = 150000;  
+  private readonly MIN_BACKOFF = 120000;  
+  private readonly MAX_BACKOFF = 170000;  
   private readonly ERROR_MIN_BACKOFF = 30000;  
   private readonly ERROR_MAX_BACKOFF = 90000;
   private readonly SEARCH_TIMEOUT = 4000; // 4 second timeout
@@ -319,6 +320,50 @@ export class TwitterService {
             }
             // === End of bot self-tweet check ===
 
+            // === Check if this tweet is a reply by a user to one of our active suggestion flows ===
+            let isReplyToOurSuggestion = false;
+            if (tweet.inReplyToStatusId) {
+              for (const [originalMentionId, state] of this.tweetStates.entries()) {
+                if (state.stage === 'name' && !state.isCompleted && state.userId === tweet.userId) {
+                  // Check if tweet.inReplyToStatusId is one of the bot's suggestion tweets for this state
+                  // This is a simplified check; a more robust way would be to store the ID of the bot's suggestion tweet in the state.
+                  // For now, we assume if the user (state.userId) replied to *something* while a state is active for them,
+                  // and that reply's parent is the originalMentionId (or a tweet from bot in that thread)
+                  // it *could* be for this flow.
+                  // The more specific check happens in the continueTokenCreation loop later.
+
+                  // Let's try to fetch the parent of this tweet (tweet.inReplyToStatusId)
+                  // If that parent tweet was made by the bot AND is a reply to the originalMentionId, then this `tweet` is a reply to our suggestion.
+                  try {
+                    const parentOfCurrentUserReply = await this.scraper.getTweet(tweet.inReplyToStatusId);
+                    if (parentOfCurrentUserReply && parentOfCurrentUserReply.userId === this.botUserId && parentOfCurrentUserReply.inReplyToStatusId === originalMentionId) {
+                       console.log(`Tweet ${tweet.id} by ${tweet.username} is a reply to bot's suggestion for original mention ${originalMentionId}. Will be handled by continueTokenCreation.`);
+                       isReplyToOurSuggestion = true;
+                       // Mark as processed here to prevent it from being picked up by handleMention as a new, independent mention
+                       // Also update timestamp if it's newer
+                       const tweetTimestampForThisReply = (tweet.timestamp as number) * 1000;
+                       if (!this.processedMentions.has(tweet.id as string)) {
+                         this.processedMentions.add(tweet.id as string);
+                         await this.updateLastProcessedTimestamp(Math.max(this.lastProcessedTimestamp, tweetTimestampForThisReply));
+                       }
+                       break; // Found the state this reply belongs to
+                    }
+                  } catch (err) {
+                    console.warn(`Could not fetch parent tweet ${tweet.inReplyToStatusId} to check if it's a bot suggestion reply:`, err);
+                  }
+                }
+              }
+            }
+
+            if (isReplyToOurSuggestion) {
+              // This tweet is a reply to one of our suggestions and has been marked.
+              // The main reply processing loop (further down) will pick it up if it matches a state.
+              // Skip calling handleMention for it.
+              console.log(`Skipping handleMention for ${tweet.id} as it's identified as a direct reply to an active suggestion flow.`);
+              continue;
+            }
+            // === End of check for reply to our suggestion ===
+
             const tweetTimestamp = (tweet.timestamp as number) * 1000;
 
             console.log('Tweet timestamp:', tweetTimestamp);
@@ -337,7 +382,8 @@ export class TwitterService {
                 parentTweetId: tweet.inReplyToStatusId,
                 timestamp: (tweet.timestamp as number * 1000).toString(),
                 tweetUsername: tweet.username,
-                tweetName: tweet.name
+                tweetName: tweet.name,
+                conversationId: tweet.conversationId
               });
               this.processedMentions.add(tweet.id as string);
               await this.updateLastProcessedTimestamp(
@@ -349,7 +395,10 @@ export class TwitterService {
           for (const [originalMentionId, state] of this.tweetStates.entries()) {
             if (!state.isCompleted && state.stage === 'name') {
               console.log('Checking replies for conversation initiated by mention:', originalMentionId);
-              const repliesInConversation = await this.searchTweetsWithTimeout(`conversation_id:${originalMentionId}`, 50);
+              // Use the original mention's conversation ID if available, otherwise fall back to the original mention ID itself.
+              const conversationSearchKey = state.originalMentionConversationId || originalMentionId;
+              console.log(`Using conversation search key: ${conversationSearchKey} (originalMentionId: ${originalMentionId}, originalMentionConversationId: ${state.originalMentionConversationId})`);
+              const repliesInConversation = await this.searchTweetsWithTimeout(`conversation_id:${conversationSearchKey}`, 50);
               
               for await (const reply of repliesInConversation) {
                 if (this.credentials.some(cred => reply.username?.toLowerCase() === cred.username.toLowerCase())) continue;
@@ -457,12 +506,12 @@ export class TwitterService {
         const existingTokenDirect = await Token.findOne({ tweetId: targetTweetToTokenizeId });
         if (existingTokenDirect) {
           console.log(`Tweet ${targetTweetToTokenizeId} already tokenized as ${existingTokenDirect.name} (${existingTokenDirect.symbol}). Mint: ${existingTokenDirect.mintAddress}`);
-          await this.replyToTweet(tweet.id, 
-            `This tweet (ID: ${targetTweetToTokenizeId}) has already been tokenized as ${existingTokenDirect.name} (${existingTokenDirect.symbol}).\n\n` +
-            `CA: ${existingTokenDirect.mintAddress}\n\n` +
-            `Trade ${existingTokenDirect.symbol} here:\n` +
-            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenDirect.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-            `https://finz.fun/coin?tokenMint=${existingTokenDirect.mintAddress}&action=BUY`);
+          // await this.replyToTweet(tweet.id, 
+          //   `This tweet (ID: ${targetTweetToTokenizeId}) has already been tokenized as ${existingTokenDirect.name} (${existingTokenDirect.symbol}).\n\n` +
+          //   `CA: ${existingTokenDirect.mintAddress}\n\n` +
+          //   `Trade ${existingTokenDirect.symbol} here:\n` +
+          //   `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenDirect.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+          //   `https://finz.fun/coin?tokenMint=${existingTokenDirect.mintAddress}&action=BUY`);
           return;
         }
         // === End Check ===
@@ -545,12 +594,12 @@ export class TwitterService {
         const existingTokenSuggestions = await Token.findOne({ tweetId: tweetForAISuggestionsId });
         if (existingTokenSuggestions) {
           console.log(`Tweet ${tweetForAISuggestionsId} (target for suggestions) already tokenized as ${existingTokenSuggestions.name} (${existingTokenSuggestions.symbol}). Mint: ${existingTokenSuggestions.mintAddress}`);
-          await this.replyToTweet(tweet.id, // Reply to the mention tweet that tried to start the flow
-            `The tweet you're referring to (ID: ${tweetForAISuggestionsId}) has already been tokenized as ${existingTokenSuggestions.name} (${existingTokenSuggestions.symbol}).\n\n` +
-            `CA: ${existingTokenSuggestions.mintAddress}\n\n` +
-            `Trade ${existingTokenSuggestions.symbol} here:\n` +
-            `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenSuggestions.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
-            `https://finz.fun/coin?tokenMint=${existingTokenSuggestions.mintAddress}&action=BUY`);
+          // await this.replyToTweet(tweet.id, // Reply to the mention tweet that tried to start the flow
+          //   `The tweet you're referring to (ID: ${tweetForAISuggestionsId}) has already been tokenized as ${existingTokenSuggestions.name} (${existingTokenSuggestions.symbol}).\n\n` +
+          //   `CA: ${existingTokenSuggestions.mintAddress}\n\n` +
+          //   `Trade ${existingTokenSuggestions.symbol} here:\n` +
+          //   `https://dial.to/?action=solana-action:https://api.finz.fun/blinks/${existingTokenSuggestions.mintAddress}&cluster=${SOLANA_ENVIRONMENT}\n\n` +
+          //   `https://finz.fun/coin?tokenMint=${existingTokenSuggestions.mintAddress}&action=BUY`);
           return; // Do not proceed with suggestion flow if target is already tokenized
         }
         // === End Check ===
@@ -576,6 +625,7 @@ export class TwitterService {
           isCompleted: false,
           createdAt: Date.now(),
           originalMentionId: tweet.id,
+          originalMentionConversationId: tweet.conversationId,
           processedReplies: new Set<string>()
         });
 
